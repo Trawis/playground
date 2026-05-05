@@ -29,10 +29,56 @@ var_unprivileged="${var_unprivileged:-1}"
 HDD_PATH="${HDD_PATH:-}"
 HDD_PATHS="${HDD_PATHS:-}"
 
+# Web UI auth username (default: torrent)
+# Example: RUTORRENT_USER=admin bash rutorrent.sh
+RUTORRENT_USER="${RUTORRENT_USER:-torrent}"
+
+# Extra plugins to install beyond ruTorrent defaults (space-separated).
+# Example: RUTORRENT_EXTRA_PLUGINS="filemanager unpack"
+# Plugins that require a privileged container will trigger a warning and
+# prompt before the container is created. If declined, they are dropped.
+RUTORRENT_EXTRA_PLUGINS="${RUTORRENT_EXTRA_PLUGINS:-}"
+
+# Plugin registry — add entries here as plugins are implemented.
+# Format: [plugin_name]=1 means the plugin requires a privileged container.
+declare -A PLUGIN_REQUIRES_PRIVILEGED=(
+  [throttle]=1
+)
+
 header_info "$APP"
 variables
 color
 catch_errors
+
+# Warn and prompt if any selected plugin requires a privileged container
+if [[ -n "${RUTORRENT_EXTRA_PLUGINS}" ]]; then
+  PRIVILEGED_NEEDED=()
+  for PLUGIN in ${RUTORRENT_EXTRA_PLUGINS}; do
+    if [[ "${PLUGIN_REQUIRES_PRIVILEGED[$PLUGIN]:-0}" == "1" ]]; then
+      PRIVILEGED_NEEDED+=("${PLUGIN}")
+    fi
+  done
+
+  if [[ ${#PRIVILEGED_NEEDED[@]} -gt 0 && "${var_unprivileged}" == "1" ]]; then
+    echo -e "${YW}⚠  The following selected plugins require a privileged container:${CL}"
+    for P in "${PRIVILEGED_NEEDED[@]}"; do
+      echo -e "${TAB}  • ${P}${CL}"
+    done
+    echo -e "${YW}   Privileged containers have reduced security isolation.${CL}"
+    read -r -p "   Switch to privileged container? [y/N]: " PRIV_CONFIRM
+    if [[ "${PRIV_CONFIRM}" =~ ^[Yy]$ ]]; then
+      var_unprivileged=0
+      msg_ok "Switched to privileged container"
+    else
+      msg_warn "Keeping unprivileged — removing plugins that require privileged access"
+      FILTERED_PLUGINS=""
+      for PLUGIN in ${RUTORRENT_EXTRA_PLUGINS}; do
+        [[ "${PLUGIN_REQUIRES_PRIVILEGED[$PLUGIN]:-0}" != "1" ]] && FILTERED_PLUGINS="${FILTERED_PLUGINS} ${PLUGIN}"
+      done
+      RUTORRENT_EXTRA_PLUGINS="${FILTERED_PLUGINS# }"
+    fi
+  fi
+fi
 
 function update_script() {
   header_info
@@ -92,7 +138,10 @@ build_container
 # automatically — remove this block before opening a PR to community-scripts.
 INSTALL_URL="https://raw.githubusercontent.com/Trawis/playground/refs/heads/main/proxmox/scripts/rtorrent-rutorrent/rutorrent-install.sh"
 msg_info "Running ruTorrent installer"
-lxc-attach -n "$CTID" -- bash -c "$(curl -fsSL ${INSTALL_URL})"
+lxc-attach -n "$CTID" -- env \
+  RUTORRENT_USER="${RUTORRENT_USER}" \
+  RUTORRENT_EXTRA_PLUGINS="${RUTORRENT_EXTRA_PLUGINS}" \
+  bash -c "$(curl -fsSL ${INSTALL_URL})"
 msg_ok "Installer complete"
 
 # Build the final list of mounts: HDD_PATH (legacy) prepended to HDD_PATHS
