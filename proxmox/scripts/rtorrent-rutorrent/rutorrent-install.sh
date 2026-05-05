@@ -41,6 +41,7 @@ $STD apt-get install -y \
   mediainfo \
   ffmpeg \
   python3 \
+  python-is-python3 \
   sox
 msg_ok "Installed dependencies"
 
