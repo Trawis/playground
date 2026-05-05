@@ -50,13 +50,18 @@ msg_ok "Created torrent user"
 
 msg_info "Preparing directories"
 mkdir -p "${WATCH_DIR}" "${SESSION_DIR}"
-if mountpoint -q "${DOWNLOAD_DIR}" 2>/dev/null; then
-  # Already a bind mount (configured before install) — just fix permissions
-  chown "${TORRENT_USER}:${TORRENT_USER}" "${DOWNLOAD_DIR}"
-else
-  mkdir -p "${DOWNLOAD_DIR}"
-  chown "${TORRENT_USER}:${TORRENT_USER}" "${DOWNLOAD_DIR}"
-fi
+# Handle /data and any additional mount points (/data2, /data3, ...)
+for DATA_DIR in /data /data2 /data3 /data4 /data5 /data6 /data7 /data8; do
+  if mountpoint -q "${DATA_DIR}" 2>/dev/null; then
+    # Already a bind mount — just fix permissions
+    chown "${TORRENT_USER}:${TORRENT_USER}" "${DATA_DIR}"
+  elif [[ "${DATA_DIR}" == "/data" ]]; then
+    # Primary download dir always created
+    mkdir -p "${DATA_DIR}"
+    chown "${TORRENT_USER}:${TORRENT_USER}" "${DATA_DIR}"
+  fi
+  # Additional paths (/data2+) are only created if already mounted — no dangling dirs
+done
 chown -R "${TORRENT_USER}:${TORRENT_USER}" "${TORRENT_HOME}"
 msg_ok "Prepared directories"
 

@@ -14,10 +14,20 @@ var_os="${var_os:-debian}"
 var_version="${var_version:-12}"
 var_unprivileged="${var_unprivileged:-1}"
 
-# Optional: set HDD_PATH to a host-side path to bind-mount into the container at /data.
-# Example: HDD_PATH=/mnt/pve/nas-data bash ct/rutorrent.sh
-# For unprivileged LXC the host path must be owned by UID/GID 101000 (maps to container UID 1000).
+# Optional: mount one or more host paths into the container.
+# For unprivileged LXC all host paths must be owned by UID/GID 101000 (maps to container UID 1000).
+#
+# Single mount (maps to /data):
+#   HDD_PATH=/mnt/hdd bash rutorrent.sh
+#
+# Multiple mounts — space-separated, each entry is hostpath:containerpath.
+# Container paths default to /data, /data2, /data3 ... if omitted:
+#   HDD_PATHS="/mnt/hdd1 /mnt/hdd2:/downloads" bash rutorrent.sh
+#
+# HDD_PATH is kept for backward compatibility and is equivalent to
+# adding /mnt/path:/data as the first entry in HDD_PATHS.
 HDD_PATH="${HDD_PATH:-}"
+HDD_PATHS="${HDD_PATHS:-}"
 
 header_info "$APP"
 variables
@@ -60,17 +70,42 @@ function update_script() {
 start
 build_container
 
-if [[ -n "${HDD_PATH}" ]]; then
-  if [[ ! -d "${HDD_PATH}" ]]; then
-    msg_error "HDD_PATH '${HDD_PATH}' does not exist on the host — skipping bind mount."
-  else
-    msg_info "Setting host ownership on ${HDD_PATH} (UID/GID 101000 for unprivileged LXC)"
-    chown -R 101000:101000 "${HDD_PATH}"
-    msg_ok "Host ownership set"
-    msg_info "Adding bind mount: ${HDD_PATH} -> /data in CT ${CTID}"
-    pct set "${CTID}" -mp0 "${HDD_PATH},mp=/data"
-    msg_ok "Bind mount configured"
-  fi
+# Build the final list of mounts: HDD_PATH (legacy) prepended to HDD_PATHS
+MOUNT_LIST=""
+[[ -n "${HDD_PATH}" ]] && MOUNT_LIST="${HDD_PATH}:/data"
+[[ -n "${HDD_PATHS}" ]] && MOUNT_LIST="${MOUNT_LIST:+${MOUNT_LIST} }${HDD_PATHS}"
+
+CONFIGURED_MOUNTS=()
+if [[ -n "${MOUNT_LIST}" ]]; then
+  MP_INDEX=0
+  DEFAULT_CT_PATHS=(/data /data2 /data3 /data4 /data5 /data6 /data7 /data8)
+
+  for ENTRY in ${MOUNT_LIST}; do
+    HOST_PATH="${ENTRY%%:*}"
+    # Use explicit container path if provided, else fall back to /data, /data2, ...
+    if [[ "${ENTRY}" == *:* ]]; then
+      CT_PATH="${ENTRY##*:}"
+    else
+      CT_PATH="${DEFAULT_CT_PATHS[${MP_INDEX}]:-/data${MP_INDEX}}"
+    fi
+
+    if [[ ! -d "${HOST_PATH}" ]]; then
+      msg_error "Mount ${MP_INDEX}: '${HOST_PATH}' does not exist on host — skipping"
+      ((MP_INDEX++))
+      continue
+    fi
+
+    msg_info "Mount mp${MP_INDEX}: setting host ownership on ${HOST_PATH} (UID/GID 101000)"
+    chown -R 101000:101000 "${HOST_PATH}"
+    msg_ok "Host ownership set on ${HOST_PATH}"
+
+    msg_info "Mount mp${MP_INDEX}: ${HOST_PATH} -> ${CT_PATH} in CT ${CTID}"
+    pct set "${CTID}" -mp${MP_INDEX} "${HOST_PATH},mp=${CT_PATH}"
+    msg_ok "Bind mount mp${MP_INDEX} configured"
+
+    CONFIGURED_MOUNTS+=("${HOST_PATH} -> ${CT_PATH}")
+    ((MP_INDEX++))
+  done
 fi
 
 description
@@ -80,11 +115,15 @@ echo -e "${CREATING}${GN}${APP} setup has been successfully initialized!${CL}"
 echo -e "${INFO}${YW} Access it using the following URL:${CL}"
 echo -e "${TAB}${GATEWAY}${BGN}http://${IP}/${CL}"
 echo -e "${INFO}${YW} Credentials are printed at the end of the install log.${CL}"
-echo -e "${INFO}${YW} Downloads land in /data inside the container.${CL}"
-if [[ -n "${HDD_PATH}" ]]; then
-  echo -e "${INFO}${GN} Bind mount configured: ${HDD_PATH} -> /data${CL}"
+echo -e "${INFO}${YW} Primary download dir inside container: /data${CL}"
+
+if [[ ${#CONFIGURED_MOUNTS[@]} -gt 0 ]]; then
+  echo -e "${INFO}${GN} Bind mounts configured:${CL}"
+  for M in "${CONFIGURED_MOUNTS[@]}"; do
+    echo -e "${TAB}  ${M}${CL}"
+  done
 else
-  echo -e "${INFO}${YW} To mount host storage later, run on the Proxmox host:${CL}"
+  echo -e "${INFO}${YW} No bind mounts configured. To add storage later, run on the Proxmox host:${CL}"
   echo -e "${TAB}  chown -R 101000:101000 /mnt/your/path${CL}"
   echo -e "${TAB}  pct set ${CTID} -mp0 /mnt/your/path,mp=/data${CL}"
 fi
