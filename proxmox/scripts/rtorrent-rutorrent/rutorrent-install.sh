@@ -68,6 +68,9 @@ msg_info "Installing ruTorrent"
 RUTORRENT_VERSION="$(curl -fsSL https://api.github.com/repos/Novik/ruTorrent/releases/latest | grep '"tag_name":' | cut -d'"' -f4)"
 $STD git clone --depth 1 --branch "${RUTORRENT_VERSION}" https://github.com/Novik/ruTorrent.git "${RUTORRENT_DIR}"
 echo "${RUTORRENT_VERSION}" > /opt/ruTorrent_version.txt
+# throttle requires kernel tc (unavailable in unprivileged LXC)
+# dump requires dumptorrent (not in Debian 12)
+rm -rf "${RUTORRENT_DIR}/plugins/throttle" "${RUTORRENT_DIR}/plugins/dump"
 chown -R www-data:www-data "${RUTORRENT_DIR}"
 msg_ok "Installed ruTorrent ${RUTORRENT_VERSION}"
 
