@@ -49,8 +49,15 @@ fi
 msg_ok "Created torrent user"
 
 msg_info "Preparing directories"
-mkdir -p "${DOWNLOAD_DIR}" "${WATCH_DIR}" "${SESSION_DIR}"
-chown -R "${TORRENT_USER}:${TORRENT_USER}" "${TORRENT_HOME}" "${DOWNLOAD_DIR}"
+mkdir -p "${WATCH_DIR}" "${SESSION_DIR}"
+if mountpoint -q "${DOWNLOAD_DIR}" 2>/dev/null; then
+  # Already a bind mount (configured before install) — just fix permissions
+  chown "${TORRENT_USER}:${TORRENT_USER}" "${DOWNLOAD_DIR}"
+else
+  mkdir -p "${DOWNLOAD_DIR}"
+  chown "${TORRENT_USER}:${TORRENT_USER}" "${DOWNLOAD_DIR}"
+fi
+chown -R "${TORRENT_USER}:${TORRENT_USER}" "${TORRENT_HOME}"
 msg_ok "Prepared directories"
 
 msg_info "Installing ruTorrent"

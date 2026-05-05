@@ -14,6 +14,11 @@ var_os="${var_os:-debian}"
 var_version="${var_version:-12}"
 var_unprivileged="${var_unprivileged:-1}"
 
+# Optional: set HDD_PATH to a host-side path to bind-mount into the container at /data.
+# Example: HDD_PATH=/mnt/pve/nas-data bash ct/rutorrent.sh
+# For unprivileged LXC the host path must be owned by UID/GID 101000 (maps to container UID 1000).
+HDD_PATH="${HDD_PATH:-}"
+
 header_info "$APP"
 variables
 color
@@ -54,6 +59,20 @@ function update_script() {
 
 start
 build_container
+
+if [[ -n "${HDD_PATH}" ]]; then
+  if [[ ! -d "${HDD_PATH}" ]]; then
+    msg_error "HDD_PATH '${HDD_PATH}' does not exist on the host — skipping bind mount."
+  else
+    msg_info "Setting host ownership on ${HDD_PATH} (UID/GID 101000 for unprivileged LXC)"
+    chown -R 101000:101000 "${HDD_PATH}"
+    msg_ok "Host ownership set"
+    msg_info "Adding bind mount: ${HDD_PATH} -> /data in CT ${CTID}"
+    pct set "${CTID}" -mp0 "${HDD_PATH},mp=/data"
+    msg_ok "Bind mount configured"
+  fi
+fi
+
 description
 
 msg_ok "Completed Successfully!\n"
@@ -62,7 +81,10 @@ echo -e "${INFO}${YW} Access it using the following URL:${CL}"
 echo -e "${TAB}${GATEWAY}${BGN}http://${IP}/${CL}"
 echo -e "${INFO}${YW} Credentials are printed at the end of the install log.${CL}"
 echo -e "${INFO}${YW} Downloads land in /data inside the container.${CL}"
-echo -e "${INFO}${YW} To mount Proxmox host storage, add a bind mount after creation:${CL}"
-echo -e "${TAB}  pct set <VMID> -mp0 /mnt/your/path,mp=/data${CL}"
-echo -e "${INFO}${YW} For unprivileged LXC, set host ownership first:${CL}"
-echo -e "${TAB}  chown -R 101000:101000 /mnt/your/path${CL}"
+if [[ -n "${HDD_PATH}" ]]; then
+  echo -e "${INFO}${GN} Bind mount configured: ${HDD_PATH} -> /data${CL}"
+else
+  echo -e "${INFO}${YW} To mount host storage later, run on the Proxmox host:${CL}"
+  echo -e "${TAB}  chown -R 101000:101000 /mnt/your/path${CL}"
+  echo -e "${TAB}  pct set ${CTID} -mp0 /mnt/your/path,mp=/data${CL}"
+fi
