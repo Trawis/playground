@@ -41,8 +41,7 @@ $STD apt-get install -y \
   mediainfo \
   ffmpeg \
   python3 \
-  sox \
-  dumptorrent
+  sox
 msg_ok "Installed dependencies"
 
 msg_info "Creating torrent user"
