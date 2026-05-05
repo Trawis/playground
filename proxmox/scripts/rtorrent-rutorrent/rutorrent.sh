@@ -68,6 +68,13 @@ function update_script() {
   $STD apt-get -y dist-upgrade
   msg_ok "Updated base packages"
 
+  msg_info "Ensuring all dependencies are installed"
+  $STD apt-get install -y \
+    python3 python-is-python3 sox \
+    mediainfo ffmpeg apache2-utils \
+    php-curl php-mbstring php-xml php-zip
+  msg_ok "Dependencies up to date"
+
   msg_info "Restarting services"
   systemctl restart php*-fpm nginx rtorrent
   msg_ok "Services restarted"
