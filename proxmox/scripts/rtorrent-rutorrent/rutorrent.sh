@@ -98,7 +98,9 @@ function update_script() {
   else
     msg_info "Updating ruTorrent ${CURRENT_VERSION} -> ${LATEST_VERSION}"
     if [[ -d /var/www/rutorrent/.git ]]; then
-      git -C /var/www/rutorrent fetch --all -q
+      # Shallow clone from install won't have tags; unshallow before fetching
+      git -C /var/www/rutorrent fetch --unshallow -q 2>/dev/null || true
+      git -C /var/www/rutorrent fetch --tags -q
       git -C /var/www/rutorrent checkout -q "${LATEST_VERSION}"
     else
       rm -rf /var/www/rutorrent
