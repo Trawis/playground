@@ -67,8 +67,14 @@ function update_script() {
   exit
 }
 
+INSTALL_URL="https://raw.githubusercontent.com/Trawis/playground/refs/heads/main/proxmox/scripts/rtorrent-rutorrent/rutorrent-install.sh"
+
 start
 build_container
+
+msg_info "Running ruTorrent installer"
+lxc-attach -n "$CTID" -- bash -c "$(curl -fsSL ${INSTALL_URL})"
+msg_ok "Installer complete"
 
 # Build the final list of mounts: HDD_PATH (legacy) prepended to HDD_PATHS
 MOUNT_LIST=""
@@ -91,7 +97,7 @@ if [[ -n "${MOUNT_LIST}" ]]; then
 
     if [[ ! -d "${HOST_PATH}" ]]; then
       msg_error "Mount ${MP_INDEX}: '${HOST_PATH}' does not exist on host — skipping"
-      ((MP_INDEX++))
+      MP_INDEX=$((MP_INDEX + 1))
       continue
     fi
 
@@ -104,7 +110,7 @@ if [[ -n "${MOUNT_LIST}" ]]; then
     msg_ok "Bind mount mp${MP_INDEX} configured"
 
     CONFIGURED_MOUNTS+=("${HOST_PATH} -> ${CT_PATH}")
-    ((MP_INDEX++))
+    MP_INDEX=$((MP_INDEX + 1))
   done
 fi
 

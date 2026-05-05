@@ -4,14 +4,23 @@
 # Author: community-scripts ORG
 # License: MIT | https://github.com/community-scripts/ProxmoxVE/raw/main/LICENSE
 # Source: https://github.com/Novik/ruTorrent | https://rakshasa.github.io/rtorrent/
+#
+# Self-contained — does not depend on community-scripts FUNCTIONS_FILE_PATH.
+# Designed to run inside a Debian 12 LXC container via lxc-attach.
 
-source /dev/stdin <<<"$FUNCTIONS_FILE_PATH"
-color
-verb_ip6
-catch_errors
-setting_up_container
-network_check
-update_os
+set -Eeuo pipefail
+trap 'echo -e "${RD}[ERROR]${CL} Failed at line $LINENO" >&2' ERR
+
+YW='\033[33m'
+GN='\033[1;92m'
+RD='\033[01;31m'
+BL='\033[36m'
+CL='\033[m'
+msg_info()  { echo -e "  ${BL}ℹ  ${1}${CL}"; }
+msg_ok()    { echo -e "  ${GN}✔  ${1}${CL}"; }
+msg_error() { echo -e "  ${RD}✖  ${1}${CL}"; }
+
+export DEBIAN_FRONTEND=noninteractive
 
 TORRENT_USER="torrent"
 TORRENT_HOME="/home/${TORRENT_USER}"
@@ -21,8 +30,13 @@ SESSION_DIR="${TORRENT_HOME}/.session"
 RUTORRENT_DIR="/var/www/rutorrent"
 SCGI_PORT="5000"
 
+msg_info "Updating OS"
+apt-get update -qq
+apt-get -y -qq dist-upgrade
+msg_ok "Updated OS"
+
 msg_info "Installing dependencies"
-$STD apt-get install -y \
+apt-get install -y -qq \
   ca-certificates \
   curl \
   git \
@@ -50,23 +64,19 @@ msg_ok "Created torrent user"
 
 msg_info "Preparing directories"
 mkdir -p "${WATCH_DIR}" "${SESSION_DIR}"
-# Handle /data and any additional mount points (/data2, /data3, ...)
 for DATA_DIR in /data /data2 /data3 /data4 /data5 /data6 /data7 /data8; do
   if mountpoint -q "${DATA_DIR}" 2>/dev/null; then
-    # Already a bind mount — just fix permissions
     chown "${TORRENT_USER}:${TORRENT_USER}" "${DATA_DIR}"
   elif [[ "${DATA_DIR}" == "/data" ]]; then
-    # Primary download dir always created
     mkdir -p "${DATA_DIR}"
     chown "${TORRENT_USER}:${TORRENT_USER}" "${DATA_DIR}"
   fi
-  # Additional paths (/data2+) are only created if already mounted — no dangling dirs
 done
 chown -R "${TORRENT_USER}:${TORRENT_USER}" "${TORRENT_HOME}"
 msg_ok "Prepared directories"
 
 msg_info "Installing ruTorrent"
-$STD git clone https://github.com/Novik/ruTorrent.git "${RUTORRENT_DIR}"
+git clone -q https://github.com/Novik/ruTorrent.git "${RUTORRENT_DIR}"
 chown -R www-data:www-data "${RUTORRENT_DIR}"
 msg_ok "Installed ruTorrent"
 
@@ -83,7 +93,6 @@ pieces.hash.on_completion.set = no
 dht.mode.set = auto
 trackers.use_udp.set = yes
 
-# SCGI for ruTorrent
 network.scgi.open_port = 127.0.0.1:${SCGI_PORT}
 EOF
 chown "${TORRENT_USER}:${TORRENT_USER}" "${TORRENT_HOME}/.rtorrent.rc"
@@ -133,12 +142,8 @@ htpasswd -bc /etc/nginx/.rutorrent.htpasswd torrent "${RUTORRENT_PASS}" &>/dev/n
 msg_ok "Created HTTP credentials (user: torrent)"
 
 msg_info "Configuring nginx"
-PHP_SOCK="$(find /run/php -name 'php*-fpm.sock' 2>/dev/null | head -n1)"
-if [[ -z "${PHP_SOCK}" ]]; then
-  # php-fpm may not have started yet; derive path from installed version
-  PHP_VER="$(php -r 'echo PHP_MAJOR_VERSION.".".PHP_MINOR_VERSION;')"
-  PHP_SOCK="/run/php/php${PHP_VER}-fpm.sock"
-fi
+PHP_VER="$(php -r 'echo PHP_MAJOR_VERSION.".".PHP_MINOR_VERSION;')"
+PHP_SOCK="/run/php/php${PHP_VER}-fpm.sock"
 
 rm -f /etc/nginx/sites-enabled/default
 cat > /etc/nginx/sites-available/rutorrent <<EOF
@@ -176,29 +181,27 @@ msg_ok "Configured nginx"
 
 msg_info "Enabling and starting services"
 systemctl daemon-reload
-$STD systemctl enable rtorrent
-$STD systemctl enable php*-fpm
-$STD systemctl enable nginx
-$STD systemctl restart php*-fpm
-$STD systemctl restart nginx
-$STD systemctl restart rtorrent
+systemctl enable -q rtorrent
+systemctl enable -q php${PHP_VER}-fpm
+systemctl enable -q nginx
+systemctl restart php${PHP_VER}-fpm
+systemctl restart nginx
+systemctl restart rtorrent
 msg_ok "Services enabled and started"
 
-motd_ssh
-customize
+IP_ADDR="$(hostname -I | awk '{print $1}')"
 
-echo "" >>/etc/motd
-echo "  ruTorrent credentials:" >>/etc/motd
-echo "    URL:      http://$(hostname -I | awk '{print $1}')/" >>/etc/motd
-echo "    User:     torrent" >>/etc/motd
-echo "    Password: ${RUTORRENT_PASS}" >>/etc/motd
-echo "    Downloads: ${DOWNLOAD_DIR}" >>/etc/motd
+echo ""
+echo "  ruTorrent credentials:" >> /etc/motd
+echo "    URL:      http://${IP_ADDR}/" >> /etc/motd
+echo "    User:     torrent" >> /etc/motd
+echo "    Password: ${RUTORRENT_PASS}" >> /etc/motd
+echo "    Downloads: ${DOWNLOAD_DIR}" >> /etc/motd
 
+echo ""
 msg_ok "ruTorrent installation complete"
-msg_info "Access URL: http://$(hostname -I | awk '{print $1}')/"
-msg_info "Username:   torrent"
-msg_info "Password:   ${RUTORRENT_PASS}"
-msg_info "Downloads:  ${DOWNLOAD_DIR}"
-msg_info "Watch dir:  ${WATCH_DIR} (drop .torrent files here)"
-
-cleanup_lxc
+msg_info "Access URL : http://${IP_ADDR}/"
+msg_info "Username   : torrent"
+msg_info "Password   : ${RUTORRENT_PASS}"
+msg_info "Downloads  : ${DOWNLOAD_DIR}"
+msg_info "Watch dir  : ${WATCH_DIR}"
