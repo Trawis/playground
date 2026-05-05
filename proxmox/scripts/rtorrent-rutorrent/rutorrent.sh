@@ -96,31 +96,31 @@ MOUNT_LIST=""
 CONFIGURED_MOUNTS=()
 if [[ -n "${MOUNT_LIST}" ]]; then
   MP_INDEX=0
-  DEFAULT_CT_PATHS=(/data /data2 /data3 /data4 /data5 /data6 /data7 /data8)
+  DEFAULT_MP_CT_PATHS=(/data /data2 /data3 /data4 /data5 /data6 /data7 /data8)
 
   for ENTRY in ${MOUNT_LIST}; do
-    HOST_PATH="${ENTRY%%:*}"
+    MP_HOST_PATH="${ENTRY%%:*}"
     if [[ "${ENTRY}" == *:* ]]; then
-      CT_PATH="${ENTRY##*:}"
+      MP_CT_PATH="${ENTRY##*:}"
     else
-      CT_PATH="${DEFAULT_CT_PATHS[${MP_INDEX}]:-/data${MP_INDEX}}"
+      MP_CT_PATH="${DEFAULT_MP_CT_PATHS[${MP_INDEX}]:-/data${MP_INDEX}}"
     fi
 
-    if [[ ! -d "${HOST_PATH}" ]]; then
-      msg_error "Mount ${MP_INDEX}: '${HOST_PATH}' does not exist on host — skipping"
+    if [[ ! -d "${MP_HOST_PATH}" ]]; then
+      msg_error "Mount ${MP_INDEX}: '${MP_HOST_PATH}' does not exist on host — skipping"
       MP_INDEX=$((MP_INDEX + 1))
       continue
     fi
 
-    msg_info "Mount mp${MP_INDEX}: setting host ownership on ${HOST_PATH} (UID/GID 101000)"
-    chown -R 101000:101000 "${HOST_PATH}"
-    msg_ok "Host ownership set on ${HOST_PATH}"
+    msg_info "Mount mp${MP_INDEX}: setting host ownership on ${MP_HOST_PATH} (UID/GID 101000)"
+    chown -R 101000:101000 "${MP_HOST_PATH}"
+    msg_ok "Host ownership set on ${MP_HOST_PATH}"
 
-    msg_info "Mount mp${MP_INDEX}: ${HOST_PATH} -> ${CT_PATH} in CT ${CTID}"
-    pct set "${CTID}" -mp${MP_INDEX} "${HOST_PATH},mp=${CT_PATH}"
+    msg_info "Mount mp${MP_INDEX}: ${MP_HOST_PATH} -> ${MP_CT_PATH} in CT ${CTID}"
+    pct set "${CTID}" -mp${MP_INDEX} "${MP_HOST_PATH},mp=${MP_CT_PATH}"
     msg_ok "Bind mount mp${MP_INDEX} configured"
 
-    CONFIGURED_MOUNTS+=("${HOST_PATH} -> ${CT_PATH}")
+    CONFIGURED_MOUNTS+=("${MP_HOST_PATH} -> ${MP_CT_PATH}")
     MP_INDEX=$((MP_INDEX + 1))
   done
 fi
@@ -131,7 +131,8 @@ msg_ok "Completed Successfully!\n"
 echo -e "${CREATING}${GN}${APP} setup has been successfully initialized!${CL}"
 echo -e "${INFO}${YW} Access it using the following URL:${CL}"
 echo -e "${TAB}${GATEWAY}${BGN}http://${IP}/${CL}"
-echo -e "${INFO}${YW} Credentials are printed at the end of the install log.${CL}"
+echo -e "${INFO}${YW} Credentials:${CL}"
+pct exec "${CTID}" -- grep -A4 "ruTorrent credentials" /etc/motd 2>/dev/null || echo -e "${TAB}  Run: pct exec ${CTID} -- cat /etc/motd${CL}"
 echo -e "${INFO}${YW} Primary download dir inside container: /data${CL}"
 
 if [[ ${#CONFIGURED_MOUNTS[@]} -gt 0 ]]; then
