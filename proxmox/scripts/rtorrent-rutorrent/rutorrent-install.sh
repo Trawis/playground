@@ -21,6 +21,10 @@ SESSION_DIR="${TORRENT_HOME}/.session"
 RUTORRENT_DIR="/var/www/rutorrent"
 SCGI_PORT="5000"
 
+# Passed in from ct script via lxc-attach env
+RUTORRENT_USER="${RUTORRENT_USER:-torrent}"
+RUTORRENT_EXTRA_PLUGINS="${RUTORRENT_EXTRA_PLUGINS:-}"
+
 msg_info "Installing dependencies"
 $STD apt-get install -y \
   ca-certificates \
@@ -71,6 +75,17 @@ echo "${RUTORRENT_VERSION}" > /opt/ruTorrent_version.txt
 # throttle requires kernel tc (unavailable in unprivileged LXC)
 # dump requires dumptorrent (not in Debian 12)
 rm -rf "${RUTORRENT_DIR}/plugins/throttle" "${RUTORRENT_DIR}/plugins/dump"
+
+if [[ -n "${RUTORRENT_EXTRA_PLUGINS}" ]]; then
+  msg_info "Installing extra plugins"
+  for PLUGIN in ${RUTORRENT_EXTRA_PLUGINS}; do
+    # Placeholder: extra plugin installation will be implemented per-plugin.
+    # Each plugin entry should clone/copy files to ${RUTORRENT_DIR}/plugins/${PLUGIN}/
+    msg_warn "Plugin '${PLUGIN}' requested but not yet implemented — skipping"
+  done
+  msg_ok "Extra plugin step complete"
+fi
+
 chown -R www-data:www-data "${RUTORRENT_DIR}"
 msg_ok "Installed ruTorrent ${RUTORRENT_VERSION}"
 
@@ -133,8 +148,8 @@ msg_ok "Configured ruTorrent"
 
 msg_info "Setting up HTTP basic auth"
 RUTORRENT_PASS="$(openssl rand -base64 12)"
-htpasswd -bc /etc/nginx/.rutorrent.htpasswd torrent "${RUTORRENT_PASS}" &>/dev/null
-msg_ok "Created HTTP credentials (user: torrent)"
+htpasswd -bc /etc/nginx/.rutorrent.htpasswd "${RUTORRENT_USER}" "${RUTORRENT_PASS}" &>/dev/null
+msg_ok "Created HTTP credentials (user: ${RUTORRENT_USER})"
 
 msg_info "Configuring nginx"
 PHP_VER="$(php -r 'echo PHP_MAJOR_VERSION.".".PHP_MINOR_VERSION;')"
@@ -195,13 +210,13 @@ customize
 echo "" >> /etc/motd
 echo "  ruTorrent credentials:" >> /etc/motd
 echo "    URL:      http://$(hostname -I | awk '{print $1}')/" >> /etc/motd
-echo "    User:     torrent" >> /etc/motd
+echo "    User:     ${RUTORRENT_USER}" >> /etc/motd
 echo "    Password: ${RUTORRENT_PASS}" >> /etc/motd
 echo "    Downloads: ${DOWNLOAD_DIR}" >> /etc/motd
 
 msg_ok "ruTorrent ${RUTORRENT_VERSION} installation complete"
 msg_info "Access URL : http://$(hostname -I | awk '{print $1}')/"
-msg_info "Username   : torrent"
+msg_info "Username   : ${RUTORRENT_USER}"
 msg_info "Password   : ${RUTORRENT_PASS}"
 msg_info "Downloads  : ${DOWNLOAD_DIR}"
 msg_info "Watch dir  : ${WATCH_DIR}"

@@ -29,10 +29,56 @@ var_unprivileged="${var_unprivileged:-1}"
 HDD_PATH="${HDD_PATH:-}"
 HDD_PATHS="${HDD_PATHS:-}"
 
+# Web UI auth username (default: torrent)
+# Example: RUTORRENT_USER=admin bash rutorrent.sh
+RUTORRENT_USER="${RUTORRENT_USER:-torrent}"
+
+# Extra plugins to install beyond ruTorrent defaults (space-separated).
+# Example: RUTORRENT_EXTRA_PLUGINS="filemanager unpack"
+# Plugins that require a privileged container will trigger a warning and
+# prompt before the container is created. If declined, they are dropped.
+RUTORRENT_EXTRA_PLUGINS="${RUTORRENT_EXTRA_PLUGINS:-}"
+
+# Plugin registry — add entries here as plugins are implemented.
+# Format: [plugin_name]=1 means the plugin requires a privileged container.
+declare -A PLUGIN_REQUIRES_PRIVILEGED=(
+  [throttle]=1
+)
+
 header_info "$APP"
 variables
 color
 catch_errors
+
+# Warn and prompt if any selected plugin requires a privileged container
+if [[ -n "${RUTORRENT_EXTRA_PLUGINS}" ]]; then
+  PRIVILEGED_NEEDED=()
+  for PLUGIN in ${RUTORRENT_EXTRA_PLUGINS}; do
+    if [[ "${PLUGIN_REQUIRES_PRIVILEGED[$PLUGIN]:-0}" == "1" ]]; then
+      PRIVILEGED_NEEDED+=("${PLUGIN}")
+    fi
+  done
+
+  if [[ ${#PRIVILEGED_NEEDED[@]} -gt 0 && "${var_unprivileged}" == "1" ]]; then
+    echo -e "${YW}⚠  The following selected plugins require a privileged container:${CL}"
+    for P in "${PRIVILEGED_NEEDED[@]}"; do
+      echo -e "${TAB}  • ${P}${CL}"
+    done
+    echo -e "${YW}   Privileged containers have reduced security isolation.${CL}"
+    read -r -p "   Switch to privileged container? [y/N]: " PRIV_CONFIRM
+    if [[ "${PRIV_CONFIRM}" =~ ^[Yy]$ ]]; then
+      var_unprivileged=0
+      msg_ok "Switched to privileged container"
+    else
+      msg_warn "Keeping unprivileged — removing plugins that require privileged access"
+      FILTERED_PLUGINS=""
+      for PLUGIN in ${RUTORRENT_EXTRA_PLUGINS}; do
+        [[ "${PLUGIN_REQUIRES_PRIVILEGED[$PLUGIN]:-0}" != "1" ]] && FILTERED_PLUGINS="${FILTERED_PLUGINS} ${PLUGIN}"
+      done
+      RUTORRENT_EXTRA_PLUGINS="${FILTERED_PLUGINS# }"
+    fi
+  fi
+fi
 
 function update_script() {
   header_info
@@ -82,6 +128,44 @@ function update_script() {
   exit
 }
 
+function check_reserved_blocks() {
+  local HOST_PATH="$1"
+  local DEVICE FS_TYPE TUNE2FS_OUT BLOCK_COUNT RESERVED_COUNT RESERVED_PCT NEW_PCT
+
+  # Resolve host path to underlying block device
+  DEVICE="$(findmnt -no SOURCE "${HOST_PATH}" 2>/dev/null)"
+  [[ -z "${DEVICE}" ]] && DEVICE="$(df -P "${HOST_PATH}" 2>/dev/null | tail -1 | awk '{print $1}')"
+  [[ -z "${DEVICE}" || "${DEVICE}" == "none" || ! -b "${DEVICE}" ]] && return
+
+  # Only ext2/3/4 support tune2fs reserved blocks
+  FS_TYPE="$(blkid -s TYPE -o value "${DEVICE}" 2>/dev/null)"
+  [[ "${FS_TYPE}" != ext* ]] && return
+
+  TUNE2FS_OUT="$(tune2fs -l "${DEVICE}" 2>/dev/null)" || return
+  BLOCK_COUNT="$(awk '/^Block count:/{print $NF}' <<< "${TUNE2FS_OUT}")"
+  RESERVED_COUNT="$(awk '/^Reserved block count:/{print $NF}' <<< "${TUNE2FS_OUT}")"
+
+  [[ -z "${BLOCK_COUNT}" || "${BLOCK_COUNT}" == "0" ]] && return
+
+  if [[ "${RESERVED_COUNT}" == "0" ]]; then
+    msg_ok "Reserved blocks already 0 on ${DEVICE}"
+    return
+  fi
+
+  RESERVED_PCT="$(awk "BEGIN {printf \"%.1f\", ${RESERVED_COUNT}*100/${BLOCK_COUNT}}")"
+
+  echo -e "${INFO}${YW} ${DEVICE} has ${RESERVED_PCT}% reserved blocks (${RESERVED_COUNT} blocks)${CL}"
+  echo -e "${TAB}  ext4 reserves 5% by default — on large disks this wastes significant space.${CL}"
+  echo -e "${TAB}  Recommended: 0 for a pure data disk, 1 if you want a small safety margin.${CL}"
+  read -r -p "   Set reserved % on ${DEVICE}? [0-5, Enter to skip]: " NEW_PCT
+  if [[ "${NEW_PCT}" =~ ^[0-5]$ ]]; then
+    tune2fs -m "${NEW_PCT}" "${DEVICE}" >/dev/null
+    msg_ok "Reserved blocks set to ${NEW_PCT}% on ${DEVICE}"
+  else
+    msg_info "Skipped — reserved blocks unchanged on ${DEVICE}"
+  fi
+}
+
 start
 build_container
 
@@ -92,7 +176,10 @@ build_container
 # automatically — remove this block before opening a PR to community-scripts.
 INSTALL_URL="https://raw.githubusercontent.com/Trawis/playground/refs/heads/main/proxmox/scripts/rtorrent-rutorrent/rutorrent-install.sh"
 msg_info "Running ruTorrent installer"
-lxc-attach -n "$CTID" -- bash -c "$(curl -fsSL ${INSTALL_URL})"
+lxc-attach -n "$CTID" -- env \
+  RUTORRENT_USER="${RUTORRENT_USER}" \
+  RUTORRENT_EXTRA_PLUGINS="${RUTORRENT_EXTRA_PLUGINS}" \
+  bash -c "$(curl -fsSL ${INSTALL_URL})"
 msg_ok "Installer complete"
 
 # Build the final list of mounts: HDD_PATH (legacy) prepended to HDD_PATHS
@@ -126,6 +213,8 @@ if [[ -n "${MOUNT_LIST}" ]]; then
     msg_info "Mount mp${MP_INDEX}: ${MP_HOST_PATH} -> ${MP_CT_PATH} in CT ${CTID}"
     pct set "${CTID}" -mp${MP_INDEX} "${MP_HOST_PATH},mp=${MP_CT_PATH}"
     msg_ok "Bind mount mp${MP_INDEX} configured"
+
+    check_reserved_blocks "${MP_HOST_PATH}"
 
     CONFIGURED_MOUNTS+=("${MP_HOST_PATH} -> ${MP_CT_PATH}")
     MP_INDEX=$((MP_INDEX + 1))
