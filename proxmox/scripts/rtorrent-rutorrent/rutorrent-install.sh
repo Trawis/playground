@@ -39,7 +39,10 @@ $STD apt-get install -y \
   unzip \
   procps \
   mediainfo \
-  ffmpeg
+  ffmpeg \
+  python3 \
+  sox \
+  dumptorrent
 msg_ok "Installed dependencies"
 
 msg_info "Creating torrent user"
@@ -140,6 +143,11 @@ server {
     server_name _;
     root ${RUTORRENT_DIR};
     index index.php index.html;
+
+    # Trust reverse proxy headers (e.g. Nginx Proxy Manager)
+    set_real_ip_from 0.0.0.0/0;
+    real_ip_header X-Forwarded-For;
+    real_ip_recursive on;
 
     auth_basic "ruTorrent";
     auth_basic_user_file /etc/nginx/.rutorrent.htpasswd;
