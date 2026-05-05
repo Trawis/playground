@@ -208,9 +208,14 @@ if [[ -n "${MOUNT_LIST}" ]]; then
       continue
     fi
 
-    msg_info "Mount mp${MP_INDEX}: setting host ownership on ${MP_HOST_PATH} (UID/GID 101000)"
-    chown -R 101000:101000 "${MP_HOST_PATH}"
-    msg_ok "Host ownership set on ${MP_HOST_PATH}"
+    MP_FS_TYPE="$(findmnt -no FSTYPE "${MP_HOST_PATH}" 2>/dev/null)"
+    if [[ "${MP_FS_TYPE}" =~ ^(cifs|nfs|nfs4|smb|fuse\.sshfs)$ ]]; then
+      msg_warn "Skipping chown on ${MP_HOST_PATH} (${MP_FS_TYPE}) — set uid=101000,gid=101000 in your mount options instead"
+    else
+      msg_info "Mount mp${MP_INDEX}: setting host ownership on ${MP_HOST_PATH} (UID/GID 101000)"
+      chown -R 101000:101000 "${MP_HOST_PATH}"
+      msg_ok "Host ownership set on ${MP_HOST_PATH}"
+    fi
 
     msg_info "Mount mp${MP_INDEX}: ${MP_HOST_PATH} -> ${MP_CT_PATH} in CT ${CTID}"
     pct set "${CTID}" -mp${MP_INDEX} "${MP_HOST_PATH},mp=${MP_CT_PATH}"
@@ -221,6 +226,13 @@ if [[ -n "${MOUNT_LIST}" ]]; then
     CONFIGURED_MOUNTS+=("${MP_HOST_PATH} -> ${MP_CT_PATH}")
     MP_INDEX=$((MP_INDEX + 1))
   done
+
+  if [[ ${#CONFIGURED_MOUNTS[@]} -gt 0 ]]; then
+    msg_info "Restarting CT ${CTID} to activate bind mounts"
+    pct stop "${CTID}"
+    pct start "${CTID}"
+    msg_ok "Container restarted — bind mounts are now active"
+  fi
 fi
 
 description
