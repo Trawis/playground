@@ -44,21 +44,29 @@ function update_script() {
     exit
   fi
 
-  msg_info "Updating ${APP} (apt)"
+  CURRENT_VERSION="$(cat /opt/ruTorrent_version.txt 2>/dev/null || echo 'unknown')"
+  LATEST_VERSION="$(curl -fsSL https://api.github.com/repos/Novik/ruTorrent/releases/latest | grep '"tag_name":' | cut -d'"' -f4)"
+
+  if [[ "${CURRENT_VERSION}" == "${LATEST_VERSION}" ]]; then
+    msg_ok "ruTorrent is already up to date (${CURRENT_VERSION})"
+  else
+    msg_info "Updating ruTorrent ${CURRENT_VERSION} -> ${LATEST_VERSION}"
+    if [[ -d /var/www/rutorrent/.git ]]; then
+      git -C /var/www/rutorrent fetch --all -q
+      git -C /var/www/rutorrent checkout -q "${LATEST_VERSION}"
+    else
+      rm -rf /var/www/rutorrent
+      $STD git clone --depth 1 --branch "${LATEST_VERSION}" https://github.com/Novik/ruTorrent.git /var/www/rutorrent
+    fi
+    echo "${LATEST_VERSION}" > /opt/ruTorrent_version.txt
+    chown -R www-data:www-data /var/www/rutorrent
+    msg_ok "Updated ruTorrent to ${LATEST_VERSION}"
+  fi
+
+  msg_info "Updating base packages"
   $STD apt-get update
   $STD apt-get -y dist-upgrade
   msg_ok "Updated base packages"
-
-  msg_info "Updating ruTorrent"
-  if [[ -d /var/www/rutorrent/.git ]]; then
-    git -C /var/www/rutorrent fetch --all -q
-    git -C /var/www/rutorrent reset --hard origin/master -q
-  else
-    rm -rf /var/www/rutorrent
-    $STD git clone https://github.com/Novik/ruTorrent.git /var/www/rutorrent
-  fi
-  chown -R www-data:www-data /var/www/rutorrent
-  msg_ok "Updated ruTorrent"
 
   msg_info "Restarting services"
   systemctl restart php*-fpm nginx rtorrent
@@ -69,6 +77,16 @@ function update_script() {
 
 start
 build_container
+
+# NOTE: The lxc-attach block below is required when running from a fork because
+# build.func fetches the install script from community-scripts/ProxmoxVE (hardcoded)
+# and 404s since this script is not yet in the official repo.
+# When submitted upstream, build.func will find and run the install script
+# automatically — remove this block before opening a PR to community-scripts.
+INSTALL_URL="https://raw.githubusercontent.com/Trawis/playground/refs/heads/main/proxmox/scripts/rtorrent-rutorrent/rutorrent-install.sh"
+msg_info "Running ruTorrent installer"
+lxc-attach -n "$CTID" -- bash -c "$(curl -fsSL ${INSTALL_URL})"
+msg_ok "Installer complete"
 
 # Build the final list of mounts: HDD_PATH (legacy) prepended to HDD_PATHS
 MOUNT_LIST=""
@@ -82,7 +100,6 @@ if [[ -n "${MOUNT_LIST}" ]]; then
 
   for ENTRY in ${MOUNT_LIST}; do
     HOST_PATH="${ENTRY%%:*}"
-    # Use explicit container path if provided, else fall back to /data, /data2, ...
     if [[ "${ENTRY}" == *:* ]]; then
       CT_PATH="${ENTRY##*:}"
     else
@@ -91,7 +108,7 @@ if [[ -n "${MOUNT_LIST}" ]]; then
 
     if [[ ! -d "${HOST_PATH}" ]]; then
       msg_error "Mount ${MP_INDEX}: '${HOST_PATH}' does not exist on host — skipping"
-      ((MP_INDEX++))
+      MP_INDEX=$((MP_INDEX + 1))
       continue
     fi
 
@@ -104,7 +121,7 @@ if [[ -n "${MOUNT_LIST}" ]]; then
     msg_ok "Bind mount mp${MP_INDEX} configured"
 
     CONFIGURED_MOUNTS+=("${HOST_PATH} -> ${CT_PATH}")
-    ((MP_INDEX++))
+    MP_INDEX=$((MP_INDEX + 1))
   done
 fi
 

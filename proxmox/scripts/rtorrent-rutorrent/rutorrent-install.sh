@@ -50,25 +50,23 @@ msg_ok "Created torrent user"
 
 msg_info "Preparing directories"
 mkdir -p "${WATCH_DIR}" "${SESSION_DIR}"
-# Handle /data and any additional mount points (/data2, /data3, ...)
 for DATA_DIR in /data /data2 /data3 /data4 /data5 /data6 /data7 /data8; do
   if mountpoint -q "${DATA_DIR}" 2>/dev/null; then
-    # Already a bind mount — just fix permissions
     chown "${TORRENT_USER}:${TORRENT_USER}" "${DATA_DIR}"
   elif [[ "${DATA_DIR}" == "/data" ]]; then
-    # Primary download dir always created
     mkdir -p "${DATA_DIR}"
     chown "${TORRENT_USER}:${TORRENT_USER}" "${DATA_DIR}"
   fi
-  # Additional paths (/data2+) are only created if already mounted — no dangling dirs
 done
 chown -R "${TORRENT_USER}:${TORRENT_USER}" "${TORRENT_HOME}"
 msg_ok "Prepared directories"
 
 msg_info "Installing ruTorrent"
-$STD git clone https://github.com/Novik/ruTorrent.git "${RUTORRENT_DIR}"
+RUTORRENT_VERSION="$(curl -fsSL https://api.github.com/repos/Novik/ruTorrent/releases/latest | grep '"tag_name":' | cut -d'"' -f4)"
+$STD git clone --depth 1 --branch "${RUTORRENT_VERSION}" https://github.com/Novik/ruTorrent.git "${RUTORRENT_DIR}"
+echo "${RUTORRENT_VERSION}" > /opt/ruTorrent_version.txt
 chown -R www-data:www-data "${RUTORRENT_DIR}"
-msg_ok "Installed ruTorrent"
+msg_ok "Installed ruTorrent ${RUTORRENT_VERSION}"
 
 msg_info "Configuring rTorrent"
 cat > "${TORRENT_HOME}/.rtorrent.rc" <<EOF
@@ -83,7 +81,6 @@ pieces.hash.on_completion.set = no
 dht.mode.set = auto
 trackers.use_udp.set = yes
 
-# SCGI for ruTorrent
 network.scgi.open_port = 127.0.0.1:${SCGI_PORT}
 EOF
 chown "${TORRENT_USER}:${TORRENT_USER}" "${TORRENT_HOME}/.rtorrent.rc"
@@ -133,12 +130,8 @@ htpasswd -bc /etc/nginx/.rutorrent.htpasswd torrent "${RUTORRENT_PASS}" &>/dev/n
 msg_ok "Created HTTP credentials (user: torrent)"
 
 msg_info "Configuring nginx"
-PHP_SOCK="$(find /run/php -name 'php*-fpm.sock' 2>/dev/null | head -n1)"
-if [[ -z "${PHP_SOCK}" ]]; then
-  # php-fpm may not have started yet; derive path from installed version
-  PHP_VER="$(php -r 'echo PHP_MAJOR_VERSION.".".PHP_MINOR_VERSION;')"
-  PHP_SOCK="/run/php/php${PHP_VER}-fpm.sock"
-fi
+PHP_VER="$(php -r 'echo PHP_MAJOR_VERSION.".".PHP_MINOR_VERSION;')"
+PHP_SOCK="/run/php/php${PHP_VER}-fpm.sock"
 
 rm -f /etc/nginx/sites-enabled/default
 cat > /etc/nginx/sites-available/rutorrent <<EOF
@@ -177,9 +170,9 @@ msg_ok "Configured nginx"
 msg_info "Enabling and starting services"
 systemctl daemon-reload
 $STD systemctl enable rtorrent
-$STD systemctl enable php*-fpm
+$STD systemctl enable php${PHP_VER}-fpm
 $STD systemctl enable nginx
-$STD systemctl restart php*-fpm
+$STD systemctl restart php${PHP_VER}-fpm
 $STD systemctl restart nginx
 $STD systemctl restart rtorrent
 msg_ok "Services enabled and started"
@@ -187,18 +180,18 @@ msg_ok "Services enabled and started"
 motd_ssh
 customize
 
-echo "" >>/etc/motd
-echo "  ruTorrent credentials:" >>/etc/motd
-echo "    URL:      http://$(hostname -I | awk '{print $1}')/" >>/etc/motd
-echo "    User:     torrent" >>/etc/motd
-echo "    Password: ${RUTORRENT_PASS}" >>/etc/motd
-echo "    Downloads: ${DOWNLOAD_DIR}" >>/etc/motd
+echo "" >> /etc/motd
+echo "  ruTorrent credentials:" >> /etc/motd
+echo "    URL:      http://$(hostname -I | awk '{print $1}')/" >> /etc/motd
+echo "    User:     torrent" >> /etc/motd
+echo "    Password: ${RUTORRENT_PASS}" >> /etc/motd
+echo "    Downloads: ${DOWNLOAD_DIR}" >> /etc/motd
 
-msg_ok "ruTorrent installation complete"
-msg_info "Access URL: http://$(hostname -I | awk '{print $1}')/"
-msg_info "Username:   torrent"
-msg_info "Password:   ${RUTORRENT_PASS}"
-msg_info "Downloads:  ${DOWNLOAD_DIR}"
-msg_info "Watch dir:  ${WATCH_DIR} (drop .torrent files here)"
+msg_ok "ruTorrent ${RUTORRENT_VERSION} installation complete"
+msg_info "Access URL : http://$(hostname -I | awk '{print $1}')/"
+msg_info "Username   : torrent"
+msg_info "Password   : ${RUTORRENT_PASS}"
+msg_info "Downloads  : ${DOWNLOAD_DIR}"
+msg_info "Watch dir  : ${WATCH_DIR}"
 
 cleanup_lxc
