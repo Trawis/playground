@@ -115,6 +115,7 @@ cat > "${RUTORRENT_DIR}/conf/config.php" <<EOF
 \$scgi_port = ${SCGI_PORT};
 \$scgi_host = "127.0.0.1";
 \$XMLRPCMountPoint = "/RPC2";
+\$diskPath = "${DOWNLOAD_DIR}";
 \$pathToExternals = array(
   "php"  => "/usr/bin/php",
   "curl" => "/usr/bin/curl",
