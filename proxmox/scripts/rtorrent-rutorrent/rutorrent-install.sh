@@ -118,7 +118,7 @@ Type=forking
 User=${TORRENT_USER}
 Group=${TORRENT_USER}
 ExecStart=/usr/bin/screen -dmS rtorrent /usr/bin/rtorrent
-ExecStop=/usr/bin/screen -S rtorrent -X quit
+ExecStop=/usr/bin/screen -S rtorrent -X quit || true
 Restart=on-failure
 RestartSec=5
 
@@ -153,7 +153,22 @@ msg_ok "Created HTTP credentials (user: ${RUTORRENT_USER})"
 
 msg_info "Configuring nginx"
 PHP_VER="$(php -r 'echo PHP_MAJOR_VERSION.".".PHP_MINOR_VERSION;')"
-PHP_SOCK="/run/php/php${PHP_VER}-fpm.sock"
+# Use a stable socket name via a dedicated FPM pool so nginx config
+# survives PHP version upgrades without needing to be rewritten.
+PHP_SOCK="/run/php/rutorrent-fpm.sock"
+cat > "/etc/php/${PHP_VER}/fpm/pool.d/rutorrent.conf" <<POOL
+[rutorrent]
+user = www-data
+group = www-data
+listen = ${PHP_SOCK}
+listen.owner = www-data
+listen.group = www-data
+pm = dynamic
+pm.max_children = 10
+pm.start_servers = 2
+pm.min_spare_servers = 1
+pm.max_spare_servers = 3
+POOL
 
 rm -f /etc/nginx/sites-enabled/default
 cat > /etc/nginx/sites-available/rutorrent <<EOF
@@ -163,8 +178,11 @@ server {
     root ${RUTORRENT_DIR};
     index index.php index.html;
 
-    # Trust reverse proxy headers (e.g. Nginx Proxy Manager)
-    set_real_ip_from 0.0.0.0/0;
+    # Trust reverse proxy headers from private/local ranges only (e.g. Nginx Proxy Manager)
+    set_real_ip_from 127.0.0.1;
+    set_real_ip_from 10.0.0.0/8;
+    set_real_ip_from 172.16.0.0/12;
+    set_real_ip_from 192.168.0.0/16;
     real_ip_header X-Forwarded-For;
     real_ip_recursive on;
 
@@ -202,6 +220,10 @@ $STD systemctl enable nginx
 $STD systemctl restart php${PHP_VER}-fpm
 $STD systemctl restart nginx
 $STD systemctl restart rtorrent
+sleep 3
+if ! systemctl is-active --quiet rtorrent; then
+  msg_warn "rTorrent service did not start — check: journalctl -u rtorrent"
+fi
 msg_ok "Services enabled and started"
 
 motd_ssh
