@@ -29,20 +29,65 @@ var_unprivileged="${var_unprivileged:-1}"
 HDD_PATH="${HDD_PATH:-}"
 HDD_PATHS="${HDD_PATHS:-}"
 
-# Web UI auth username (default: torrent)
+# Web UI auth username — set here or answered interactively in Advanced mode.
 # Example: RUTORRENT_USER=admin bash rutorrent.sh
 RUTORRENT_USER="${RUTORRENT_USER:-torrent}"
 
-# Extra plugins to install beyond ruTorrent defaults (space-separated).
-# Example: RUTORRENT_EXTRA_PLUGINS="filemanager unpack"
-# Plugins that require a privileged container will trigger a warning and
-# prompt before the container is created. If declined, they are dropped.
-RUTORRENT_EXTRA_PLUGINS="${RUTORRENT_EXTRA_PLUGINS:-}"
+# Space-separated whitelist of ruTorrent plugins to keep after install.
+# Set via env to skip interactive prompts entirely, e.g.:
+#   RUTORRENT_PLUGINS="autotools ratio unpack" bash rutorrent.sh
+RUTORRENT_PLUGINS="${RUTORRENT_PLUGINS:-}"
 
-# Plugin registry — add entries here as plugins are implemented.
-# Format: [plugin_name]=1 means the plugin requires a privileged container.
-declare -A PLUGIN_REQUIRES_PRIVILEGED=(
-  [throttle]=1
+# ── Plugin catalogue ──────────────────────────────────────────────────────────
+# Format: "name|description|default_on|requires_privileged"
+#   default_on:          "on"  = selected by default
+#                        "off" = not selected by default
+#   requires_privileged: 1    = needs privileged LXC (kernel feature)
+#                        0    = works in unprivileged container
+PLUGIN_DEFS=(
+  "autotools|Auto-tools: labels and move-on-completion|on|0"
+  "bulk_magnet|Bulk magnet link handler|on|0"
+  "chunks|Piece/chunk map viewer|on|0"
+  "cookies|Cookie manager for private trackers|on|0"
+  "create|Create .torrent files|on|0"
+  "data|Torrent data view|on|0"
+  "datadir|Per-torrent data directory|on|0"
+  "edit|Edit tracker URLs|on|0"
+  "erasedata|Erase data on removal|on|0"
+  "extsearch|External search engines|on|0"
+  "extratio|Extended ratio rules|on|0"
+  "feeds|RSS feeds manager|on|0"
+  "filedrop|Drag-and-drop .torrent upload|on|0"
+  "filemanager|File manager|on|0"
+  "filemanager-media|File manager media preview|on|0"
+  "history|Download history|on|0"
+  "httprpc|HTTP RPC for mobile clients|on|0"
+  "ipad|iPad-optimised interface|on|0"
+  "loginmgr|Login manager|on|0"
+  "lookat|Open file/directory on server|on|0"
+  "mediainfo|Media information display|on|0"
+  "ratio|Ratio groups|on|0"
+  "rss|RSS downloader|on|0"
+  "rssurlrewrite|RSS URL rewrite rules|on|0"
+  "scheduler|Speed scheduler|on|0"
+  "screenshots|Screenshot generator|on|0"
+  "seedingtime|Seeding time column|on|0"
+  "show_peers_like_wtorrent|Extended peer list|on|0"
+  "source|Torrent source display|on|0"
+  "spectrogram|Audio spectrogram (requires sox)|on|0"
+  "theme|Theme selector|on|0"
+  "tracklabels|Tracker-based labels|on|0"
+  "trafic|Traffic chart|on|0"
+  "unpack|Auto-unpack archives (requires unrar/7z)|on|0"
+  "xmpp|XMPP/Jabber notifications|off|0"
+  "throttle|Speed throttle (requires privileged LXC)|off|1"
+  "dump|Dump torrent info (not available on Debian 10+)|off|0"
+  "geoip2|GeoIP2 peer location (not yet implemented)|off|0"
+  "pausewebui|Pause web UI (not yet implemented)|off|0"
+  "quotaspace|Disk quota manager (not yet implemented)|off|0"
+  "retrackers|Russian retrackers (not yet implemented)|off|0"
+  "rutracker_check|Rutracker.org checker (not yet implemented)|off|0"
+  "uploadeta|Upload ETA display (not yet implemented)|off|0"
 )
 
 header_info "$APP"
@@ -50,34 +95,71 @@ variables
 color
 catch_errors
 
-# Warn and prompt if any selected plugin requires a privileged container
-if [[ -n "${RUTORRENT_EXTRA_PLUGINS}" ]]; then
-  PRIVILEGED_NEEDED=()
-  for PLUGIN in ${RUTORRENT_EXTRA_PLUGINS}; do
-    if [[ "${PLUGIN_REQUIRES_PRIVILEGED[$PLUGIN]:-0}" == "1" ]]; then
-      PRIVILEGED_NEEDED+=("${PLUGIN}")
+# ── Installation mode ─────────────────────────────────────────────────────────
+# Skip prompts entirely if RUTORRENT_PLUGINS was set in the environment.
+if [[ -z "${RUTORRENT_PLUGINS}" ]]; then
+  echo ""
+  echo -e "${INFO}${YW} Installation mode:${CL}"
+  echo -e "${TAB}  1) Default  — unprivileged container, standard plugin set, username: torrent"
+  echo -e "${TAB}  2) Advanced — choose container type, username, and plugins"
+  read -r -p "   Select [1/2, default: 1]: " _MODE
+
+  if [[ "${_MODE}" == "2" ]]; then
+    # ── Advanced mode ──────────────────────────────────────────────────────────
+    read -r -p "   Privileged container? [y/N]: " _PRIV
+    [[ "${_PRIV}" =~ ^[Yy]$ ]] && var_unprivileged=0
+
+    read -r -p "   Web UI username [torrent]: " _USER
+    [[ -n "${_USER}" ]] && RUTORRENT_USER="${_USER}"
+
+    # Build whiptail checklist
+    _WHIP_ITEMS=()
+    for _DEF in "${PLUGIN_DEFS[@]}"; do
+      IFS='|' read -r _PNAME _PDESC _PDEF _PPRIV <<< "${_DEF}"
+      if [[ "${_PPRIV}" == "1" && "${var_unprivileged}" == "1" ]]; then
+        _PDEF="off"
+        _PDESC="${_PDESC} [privileged only]"
+      fi
+      _WHIP_ITEMS+=("${_PNAME}" "${_PDESC}" "${_PDEF}")
+    done
+
+    _LIST_H=$(( ${#PLUGIN_DEFS[@]} < 20 ? ${#PLUGIN_DEFS[@]} : 20 ))
+    _BOX_H=$(( _LIST_H + 8 ))
+
+    _SEL="$(whiptail --title "ruTorrent — Plugin Selection" \
+      --checklist "Space to toggle, Enter to confirm" \
+      "${_BOX_H}" 76 "${_LIST_H}" \
+      "${_WHIP_ITEMS[@]}" 3>&1 1>&2 2>&3)" || true
+
+    RUTORRENT_PLUGINS="$(echo "${_SEL}" | tr -d '"')"
+
+  else
+    # ── Default / silent mode ──────────────────────────────────────────────────
+    for _DEF in "${PLUGIN_DEFS[@]}"; do
+      IFS='|' read -r _PNAME _PDESC _PDEF _PPRIV <<< "${_DEF}"
+      [[ "${_PPRIV}" == "1" && "${var_unprivileged}" == "1" ]] && continue
+      [[ "${_PDEF}" == "on" ]] && RUTORRENT_PLUGINS="${RUTORRENT_PLUGINS} ${_PNAME}"
+    done
+    RUTORRENT_PLUGINS="${RUTORRENT_PLUGINS# }"
+  fi
+fi
+
+# Strip any privileged-only plugin if the container is unprivileged
+if [[ "${var_unprivileged}" == "1" ]]; then
+  _FILTERED=""
+  for _P in ${RUTORRENT_PLUGINS}; do
+    _REQ=0
+    for _DEF in "${PLUGIN_DEFS[@]}"; do
+      IFS='|' read -r _PNAME _ _ _PPRIV <<< "${_DEF}"
+      [[ "${_PNAME}" == "${_P}" && "${_PPRIV}" == "1" ]] && { _REQ=1; break; }
+    done
+    if [[ "${_REQ}" == "1" ]]; then
+      msg_warn "Plugin '${_P}' requires a privileged container — skipping"
+    else
+      _FILTERED="${_FILTERED} ${_P}"
     fi
   done
-
-  if [[ ${#PRIVILEGED_NEEDED[@]} -gt 0 && "${var_unprivileged}" == "1" ]]; then
-    echo -e "${YW}⚠  The following selected plugins require a privileged container:${CL}"
-    for P in "${PRIVILEGED_NEEDED[@]}"; do
-      echo -e "${TAB}  • ${P}${CL}"
-    done
-    echo -e "${YW}   Privileged containers have reduced security isolation.${CL}"
-    read -r -p "   Switch to privileged container? [y/N]: " PRIV_CONFIRM
-    if [[ "${PRIV_CONFIRM}" =~ ^[Yy]$ ]]; then
-      var_unprivileged=0
-      msg_ok "Switched to privileged container"
-    else
-      msg_warn "Keeping unprivileged — removing plugins that require privileged access"
-      FILTERED_PLUGINS=""
-      for PLUGIN in ${RUTORRENT_EXTRA_PLUGINS}; do
-        [[ "${PLUGIN_REQUIRES_PRIVILEGED[$PLUGIN]:-0}" != "1" ]] && FILTERED_PLUGINS="${FILTERED_PLUGINS} ${PLUGIN}"
-      done
-      RUTORRENT_EXTRA_PLUGINS="${FILTERED_PLUGINS# }"
-    fi
-  fi
+  RUTORRENT_PLUGINS="${_FILTERED# }"
 fi
 
 function update_script() {
@@ -180,7 +262,7 @@ INSTALL_URL="https://raw.githubusercontent.com/Trawis/playground/refs/heads/main
 msg_info "Running ruTorrent installer"
 lxc-attach -n "$CTID" -- env \
   RUTORRENT_USER="${RUTORRENT_USER}" \
-  RUTORRENT_EXTRA_PLUGINS="${RUTORRENT_EXTRA_PLUGINS}" \
+  RUTORRENT_PLUGINS="${RUTORRENT_PLUGINS}" \
   bash -c "$(curl -fsSL ${INSTALL_URL})"
 msg_ok "Installer complete"
 

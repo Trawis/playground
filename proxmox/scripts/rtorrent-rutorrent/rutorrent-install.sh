@@ -23,7 +23,9 @@ SCGI_PORT="5000"
 
 # Passed in from ct script via lxc-attach env
 RUTORRENT_USER="${RUTORRENT_USER:-torrent}"
-RUTORRENT_EXTRA_PLUGINS="${RUTORRENT_EXTRA_PLUGINS:-}"
+# Space-separated whitelist of plugin names to keep (everything else is removed).
+# Internal system plugins (_task, _getdir, _noty, _noty2, _cloudflare) are always kept.
+RUTORRENT_PLUGINS="${RUTORRENT_PLUGINS:-}"
 
 msg_info "Installing dependencies"
 $STD apt-get install -y \
@@ -72,19 +74,33 @@ msg_info "Installing ruTorrent"
 RUTORRENT_VERSION="$(curl -fsSL https://api.github.com/repos/Novik/ruTorrent/releases/latest | grep '"tag_name":' | cut -d'"' -f4)"
 $STD git clone --depth 1 --branch "${RUTORRENT_VERSION}" https://github.com/Novik/ruTorrent.git "${RUTORRENT_DIR}"
 echo "${RUTORRENT_VERSION}" > /opt/ruTorrent_version.txt
-# throttle requires kernel tc (unavailable in unprivileged LXC)
-# dump requires dumptorrent (not in Debian 12)
-rm -rf "${RUTORRENT_DIR}/plugins/throttle" "${RUTORRENT_DIR}/plugins/dump"
 
-if [[ -n "${RUTORRENT_EXTRA_PLUGINS}" ]]; then
-  msg_info "Installing extra plugins"
-  for PLUGIN in ${RUTORRENT_EXTRA_PLUGINS}; do
-    # Placeholder: extra plugin installation will be implemented per-plugin.
-    # Each plugin entry should clone/copy files to ${RUTORRENT_DIR}/plugins/${PLUGIN}/
-    msg_warn "Plugin '${PLUGIN}' requested but not yet implemented — skipping"
+msg_info "Configuring plugins"
+# Internal system plugins — never removed regardless of selection
+KEEP_ALWAYS="_cloudflare _task _getdir _noty _noty2"
+
+# Third-party plugins not yet implemented (warn if selected)
+NOT_IMPLEMENTED="geoip2 pausewebui quotaspace retrackers rutracker_check uploadeta"
+
+if [[ -n "${RUTORRENT_PLUGINS}" ]]; then
+  for PLUGIN_DIR in "${RUTORRENT_DIR}/plugins"/*/; do
+    [[ -d "${PLUGIN_DIR}" ]] || continue
+    PLUGIN_NAME="$(basename "${PLUGIN_DIR}")"
+    echo " ${KEEP_ALWAYS} " | grep -q " ${PLUGIN_NAME} " && continue
+    if ! echo " ${RUTORRENT_PLUGINS} " | grep -q " ${PLUGIN_NAME} "; then
+      rm -rf "${PLUGIN_DIR}"
+    fi
   done
-  msg_ok "Extra plugin step complete"
+  for PLUGIN in ${RUTORRENT_PLUGINS}; do
+    if echo " ${NOT_IMPLEMENTED} " | grep -q " ${PLUGIN} "; then
+      msg_warn "Plugin '${PLUGIN}' is not yet implemented — skipping"
+    fi
+  done
+else
+  # No plugin list: remove only the known-broken defaults
+  rm -rf "${RUTORRENT_DIR}/plugins/throttle" "${RUTORRENT_DIR}/plugins/dump"
 fi
+msg_ok "Plugins configured"
 
 chown -R www-data:www-data "${RUTORRENT_DIR}"
 msg_ok "Installed ruTorrent ${RUTORRENT_VERSION}"
