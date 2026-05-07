@@ -33,10 +33,21 @@ HDD_PATHS="${HDD_PATHS:-}"
 # Example: RUTORRENT_USER=admin bash rutorrent.sh
 RUTORRENT_USER="${RUTORRENT_USER:-torrent}"
 
-# Space-separated whitelist of ruTorrent plugins to keep after install.
+# Space-separated whitelist of ruTorrent plugins to enable after install.
 # Set via env to skip interactive prompts entirely, e.g.:
 #   RUTORRENT_PLUGINS="autotools ratio unpack" bash rutorrent.sh
 RUTORRENT_PLUGINS="${RUTORRENT_PLUGINS:-}"
+
+# Expose nginx /RPC2 endpoint (rTorrent XMLRPC/SCGI).
+# Off by default — enable only if you need external XMLRPC access.
+# When enabled it is still protected by HTTP basic auth.
+# Example: RUTORRENT_ENABLE_RPC2=1 bash rutorrent.sh
+RUTORRENT_ENABLE_RPC2="${RUTORRENT_ENABLE_RPC2:-0}"
+
+# Set to 1 to allow the installer to chown the host mount path to UID/GID 101000.
+# Leave at 0 for CIFS/NFS/Synology shares — set uid/gid in mount options instead.
+# Example: CHOWN_MOUNTS=1 HDD_PATH=/mnt/data bash rutorrent.sh
+CHOWN_MOUNTS="${CHOWN_MOUNTS:-0}"
 
 # ── Plugin catalogue ──────────────────────────────────────────────────────────
 # Format: "name|description|default_on|requires_privileged"
@@ -111,6 +122,12 @@ if [[ -z "${RUTORRENT_PLUGINS}" ]]; then
 
     read -r -p "   Web UI username [torrent]: " _USER
     [[ -n "${_USER}" ]] && RUTORRENT_USER="${_USER}"
+
+    read -r -p "   Expose /RPC2 over nginx (XMLRPC access)? [y/N]: " _RPC2
+    [[ "${_RPC2}" =~ ^[Yy]$ ]] && RUTORRENT_ENABLE_RPC2=1
+
+    read -r -p "   Recursively chown host mount path(s) to UID/GID 101000? [y/N]: " _CHOWN
+    [[ "${_CHOWN}" =~ ^[Yy]$ ]] && CHOWN_MOUNTS=1
 
     # Build whiptail checklist
     _WHIP_ITEMS=()
@@ -225,6 +242,7 @@ msg_info "Running ruTorrent installer"
 lxc-attach -n "$CTID" -- env \
   RUTORRENT_USER="${RUTORRENT_USER}" \
   RUTORRENT_PLUGINS="${RUTORRENT_PLUGINS}" \
+  RUTORRENT_ENABLE_RPC2="${RUTORRENT_ENABLE_RPC2}" \
   bash -c "$(curl -fsSL ${INSTALL_URL})"
 msg_ok "Installer complete"
 
@@ -252,13 +270,17 @@ if [[ -n "${MOUNT_LIST}" ]]; then
       continue
     fi
 
-    MP_FS_TYPE="$(findmnt -no FSTYPE "${MP_HOST_PATH}" 2>/dev/null)"
-    if [[ "${MP_FS_TYPE}" =~ ^(cifs|nfs|nfs4|smb|fuse\.sshfs)$ ]]; then
-      msg_warn "Skipping chown on ${MP_HOST_PATH} (${MP_FS_TYPE}) — set uid=101000,gid=101000 in your mount options instead"
+    if [[ "${CHOWN_MOUNTS}" == "1" ]]; then
+      MP_FS_TYPE="$(findmnt -no FSTYPE "${MP_HOST_PATH}" 2>/dev/null)"
+      if [[ "${MP_FS_TYPE}" =~ ^(cifs|nfs|nfs4|smb|fuse\.sshfs)$ ]]; then
+        msg_warn "Skipping chown on ${MP_HOST_PATH} (${MP_FS_TYPE}) — set uid=101000,gid=101000 in your mount options instead"
+      else
+        msg_info "Mount mp${MP_INDEX}: setting host ownership on ${MP_HOST_PATH} (UID/GID 101000)"
+        chown -R 101000:101000 "${MP_HOST_PATH}"
+        msg_ok "Host ownership set on ${MP_HOST_PATH}"
+      fi
     else
-      msg_info "Mount mp${MP_INDEX}: setting host ownership on ${MP_HOST_PATH} (UID/GID 101000)"
-      chown -R 101000:101000 "${MP_HOST_PATH}"
-      msg_ok "Host ownership set on ${MP_HOST_PATH}"
+      msg_warn "Skipping chown on ${MP_HOST_PATH} — set CHOWN_MOUNTS=1 to enable, or ensure UID/GID 101000 can write there"
     fi
 
     msg_info "Mount mp${MP_INDEX}: ${MP_HOST_PATH} -> ${MP_CT_PATH} in CT ${CTID}"
@@ -293,7 +315,5 @@ if [[ ${#CONFIGURED_MOUNTS[@]} -gt 0 ]]; then
     echo -e "${TAB}  ${M}${CL}"
   done
 else
-  echo -e "${INFO}${YW} No bind mounts configured. To add storage later, run on the Proxmox host:${CL}"
-  echo -e "${TAB}  chown -R 101000:101000 /mnt/your/path${CL}"
-  echo -e "${TAB}  pct set ${CTID} -mp0 /mnt/your/path,mp=/data${CL}"
+  echo -e "${INFO}${YW} No bind mounts configured. To add storage later, see README.md${CL}"
 fi

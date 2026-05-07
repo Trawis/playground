@@ -23,15 +23,17 @@ SCGI_PORT="5000"
 
 # Passed in from ct script via lxc-attach env
 RUTORRENT_USER="${RUTORRENT_USER:-torrent}"
-# Space-separated whitelist of plugin names to keep (everything else is removed).
-# Internal system plugins (_task, _getdir, _noty, _noty2, _cloudflare) are always kept.
+# Space-separated list of plugins to enable. All others are disabled via plugins.ini.
 RUTORRENT_PLUGINS="${RUTORRENT_PLUGINS:-}"
+# Expose nginx /RPC2 (rTorrent XMLRPC/SCGI). Off by default.
+RUTORRENT_ENABLE_RPC2="${RUTORRENT_ENABLE_RPC2:-0}"
 
 msg_info "Installing dependencies"
 $STD apt-get install -y \
   ca-certificates \
   curl \
   git \
+  openssl \
   nginx \
   apache2-utils \
   php-fpm \
@@ -76,30 +78,40 @@ $STD git clone --depth 1 --branch "${RUTORRENT_VERSION}" https://github.com/Novi
 echo "${RUTORRENT_VERSION}" > /opt/ruTorrent_version.txt
 
 msg_info "Configuring plugins"
-# Internal system plugins — never removed regardless of selection
+# Internal system plugins — always enabled regardless of selection
 KEEP_ALWAYS="_cloudflare _task _getdir _noty _noty2"
-
-# Third-party plugins not yet implemented (warn if selected)
+# Disabled by default when no explicit list is given
+DISABLED_DEFAULT="throttle dump"
+# Not yet implemented by this installer (warn if selected)
 NOT_IMPLEMENTED="geoip2 pausewebui quotaspace retrackers rutracker_check uploadeta"
 
-if [[ -n "${RUTORRENT_PLUGINS}" ]]; then
-  for PLUGIN_DIR in "${RUTORRENT_DIR}/plugins"/*/; do
-    [[ -d "${PLUGIN_DIR}" ]] || continue
-    PLUGIN_NAME="$(basename "${PLUGIN_DIR}")"
-    echo " ${KEEP_ALWAYS} " | grep -q " ${PLUGIN_NAME} " && continue
-    if ! echo " ${RUTORRENT_PLUGINS} " | grep -q " ${PLUGIN_NAME} "; then
-      rm -rf "${PLUGIN_DIR}"
-    fi
-  done
-  for PLUGIN in ${RUTORRENT_PLUGINS}; do
-    if echo " ${NOT_IMPLEMENTED} " | grep -q " ${PLUGIN} "; then
-      msg_warn "Plugin '${PLUGIN}' is not yet implemented — skipping"
-    fi
-  done
-else
-  # No plugin list: remove only the known-broken defaults
-  rm -rf "${RUTORRENT_DIR}/plugins/throttle" "${RUTORRENT_DIR}/plugins/dump"
-fi
+PLUGINS_INI="${RUTORRENT_DIR}/conf/plugins.ini"
+: > "${PLUGINS_INI}"
+
+for PLUGIN_DIR in "${RUTORRENT_DIR}/plugins"/*/; do
+  [[ -d "${PLUGIN_DIR}" ]] || continue
+  PLUGIN_NAME="$(basename "${PLUGIN_DIR}")"
+  ENABLED="no"
+
+  if echo " ${KEEP_ALWAYS} " | grep -q " ${PLUGIN_NAME} "; then
+    ENABLED="yes"
+  elif [[ -n "${RUTORRENT_PLUGINS}" ]]; then
+    echo " ${RUTORRENT_PLUGINS} " | grep -q " ${PLUGIN_NAME} " && ENABLED="yes"
+  else
+    ENABLED="yes"
+    echo " ${DISABLED_DEFAULT} " | grep -q " ${PLUGIN_NAME} " && ENABLED="no"
+  fi
+
+  printf '[%s]\nenabled = %s\n\n' "${PLUGIN_NAME}" "${ENABLED}" >> "${PLUGINS_INI}"
+done
+
+for PLUGIN in ${RUTORRENT_PLUGINS}; do
+  if echo " ${NOT_IMPLEMENTED} " | grep -q " ${PLUGIN} "; then
+    msg_warn "Plugin '${PLUGIN}' is not yet implemented — leaving disabled in plugins.ini"
+  fi
+done
+
+chown www-data:www-data "${PLUGINS_INI}"
 msg_ok "Plugins configured"
 
 chown -R www-data:www-data "${RUTORRENT_DIR}"
@@ -134,7 +146,7 @@ Type=forking
 User=${TORRENT_USER}
 Group=${TORRENT_USER}
 ExecStart=/usr/bin/screen -dmS rtorrent /usr/bin/rtorrent
-ExecStop=/usr/bin/screen -S rtorrent -X quit || true
+ExecStop=/usr/bin/bash -lc '/usr/bin/screen -S rtorrent -X quit || true'
 Restart=on-failure
 RestartSec=5
 
@@ -186,6 +198,16 @@ pm.min_spare_servers = 1
 pm.max_spare_servers = 3
 POOL
 
+RPC2_BLOCK=""
+if [[ "${RUTORRENT_ENABLE_RPC2}" == "1" ]]; then
+  RPC2_BLOCK="
+    location /RPC2 {
+        include scgi_params;
+        scgi_pass 127.0.0.1:${SCGI_PORT};
+    }
+"
+fi
+
 rm -f /etc/nginx/sites-enabled/default
 cat > /etc/nginx/sites-available/rutorrent <<EOF
 server {
@@ -208,13 +230,7 @@ server {
     location / {
         try_files \$uri \$uri/ /index.php?\$query_string;
     }
-
-    location /RPC2 {
-        auth_basic off;
-        include scgi_params;
-        scgi_pass 127.0.0.1:${SCGI_PORT};
-    }
-
+${RPC2_BLOCK}
     location ~ \.php$ {
         include snippets/fastcgi-php.conf;
         fastcgi_pass unix:${PHP_SOCK};
