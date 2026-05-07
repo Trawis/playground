@@ -49,6 +49,14 @@ RUTORRENT_ENABLE_RPC2="${RUTORRENT_ENABLE_RPC2:-0}"
 # Example: CHOWN_MOUNTS=1 HDD_PATH=/mnt/data bash rutorrent.sh
 CHOWN_MOUNTS="${CHOWN_MOUNTS:-0}"
 
+# Max .torrent upload size in MiB — applied to PHP, nginx, and ruTorrent filedrop.
+# Example: RUTORRENT_MAX_UPLOAD_MB=64 bash rutorrent.sh
+RUTORRENT_MAX_UPLOAD_MB="${RUTORRENT_MAX_UPLOAD_MB:-32}"
+
+# Install vsftpd FTP server. Off by default. Creates a separate FTP user/password.
+# Example: INSTALL_FTP=1 bash rutorrent.sh
+INSTALL_FTP="${INSTALL_FTP:-0}"
+
 # ── Plugin catalogue ──────────────────────────────────────────────────────────
 # Format: "name|description|default_on|requires_privileged"
 #   default_on:          "on"  = selected by default
@@ -128,6 +136,12 @@ if [[ -z "${RUTORRENT_PLUGINS}" ]]; then
 
     read -r -p "   Recursively chown host mount path(s) to UID/GID 101000? [y/N]: " _CHOWN
     [[ "${_CHOWN}" =~ ^[Yy]$ ]] && CHOWN_MOUNTS=1
+
+    read -r -p "   Max .torrent upload size in MiB [32]: " _UPLOAD_MB
+    [[ "${_UPLOAD_MB}" =~ ^[0-9]+$ ]] && RUTORRENT_MAX_UPLOAD_MB="${_UPLOAD_MB}"
+
+    read -r -p "   Install FTP server (vsftpd, separate user/password)? [y/N]: " _FTP
+    [[ "${_FTP}" =~ ^[Yy]$ ]] && INSTALL_FTP=1
 
     # Build whiptail checklist
     _WHIP_ITEMS=()
@@ -243,6 +257,8 @@ lxc-attach -n "$CTID" -- env \
   RUTORRENT_USER="${RUTORRENT_USER}" \
   RUTORRENT_PLUGINS="${RUTORRENT_PLUGINS}" \
   RUTORRENT_ENABLE_RPC2="${RUTORRENT_ENABLE_RPC2}" \
+  RUTORRENT_MAX_UPLOAD_MB="${RUTORRENT_MAX_UPLOAD_MB}" \
+  INSTALL_FTP="${INSTALL_FTP}" \
   bash -c "$(curl -fsSL ${INSTALL_URL})"
 msg_ok "Installer complete"
 

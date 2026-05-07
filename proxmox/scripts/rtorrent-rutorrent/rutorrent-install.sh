@@ -27,6 +27,11 @@ RUTORRENT_USER="${RUTORRENT_USER:-torrent}"
 RUTORRENT_PLUGINS="${RUTORRENT_PLUGINS:-}"
 # Expose nginx /RPC2 (rTorrent XMLRPC/SCGI). Off by default.
 RUTORRENT_ENABLE_RPC2="${RUTORRENT_ENABLE_RPC2:-0}"
+# Max .torrent upload size in MiB — sets PHP limits, nginx body size, filedrop plugin.
+RUTORRENT_MAX_UPLOAD_MB="${RUTORRENT_MAX_UPLOAD_MB:-32}"
+# Install vsftpd FTP server with a separate user/password. Off by default.
+INSTALL_FTP="${INSTALL_FTP:-0}"
+FTP_USER="${FTP_USER:-rutorrentftp}"
 
 msg_info "Installing dependencies"
 $STD apt-get install -y \
@@ -76,6 +81,13 @@ msg_info "Installing ruTorrent"
 RUTORRENT_VERSION="$(curl -fsSL https://api.github.com/repos/Novik/ruTorrent/releases/latest | grep '"tag_name":' | cut -d'"' -f4)"
 $STD git clone --depth 1 --branch "${RUTORRENT_VERSION}" https://github.com/Novik/ruTorrent.git "${RUTORRENT_DIR}"
 echo "${RUTORRENT_VERSION}" > /opt/ruTorrent_version.txt
+
+msg_info "Configuring filedrop upload limit"
+if [[ -f "${RUTORRENT_DIR}/plugins/filedrop/conf.php" ]]; then
+  sed -i "s/\$maxfilesize\s*=\s*[0-9]\+;/\$maxfilesize = ${RUTORRENT_MAX_UPLOAD_MB};/" \
+    "${RUTORRENT_DIR}/plugins/filedrop/conf.php"
+fi
+msg_ok "Set filedrop upload limit to ${RUTORRENT_MAX_UPLOAD_MB} MiB"
 
 msg_info "Configuring plugins"
 # Internal system plugins — always enabled regardless of selection
@@ -198,6 +210,17 @@ pm.min_spare_servers = 1
 pm.max_spare_servers = 3
 POOL
 
+PHP_UPLOAD_SIZE="${RUTORRENT_MAX_UPLOAD_MB}M"
+for PHP_SAPI_DIR in "/etc/php/${PHP_VER}/fpm/conf.d" "/etc/php/${PHP_VER}/cli/conf.d"; do
+  [[ -d "${PHP_SAPI_DIR}" ]] || continue
+  cat > "${PHP_SAPI_DIR}/99-rutorrent-upload.ini" <<PHPINI
+upload_max_filesize = ${PHP_UPLOAD_SIZE}
+post_max_size = ${PHP_UPLOAD_SIZE}
+memory_limit = 256M
+max_file_uploads = 20
+PHPINI
+done
+
 RPC2_BLOCK=""
 if [[ "${RUTORRENT_ENABLE_RPC2}" == "1" ]]; then
   RPC2_BLOCK="
@@ -213,6 +236,7 @@ cat > /etc/nginx/sites-available/rutorrent <<EOF
 server {
     listen 80 default_server;
     server_name _;
+    client_max_body_size ${RUTORRENT_MAX_UPLOAD_MB}M;
     root ${RUTORRENT_DIR};
     index index.php index.html;
 
@@ -258,6 +282,37 @@ if ! systemctl is-active --quiet rtorrent; then
 fi
 msg_ok "Services enabled and started"
 
+FTP_PASS=""
+if [[ "${INSTALL_FTP}" == "1" ]]; then
+  msg_info "Installing FTP server"
+  $STD apt-get install -y vsftpd
+  FTP_PASS="$(openssl rand -base64 18)"
+  if ! id -u "${FTP_USER}" &>/dev/null; then
+    useradd -m -d "${DOWNLOAD_DIR}" -s /bin/bash "${FTP_USER}"
+  fi
+  echo "${FTP_USER}:${FTP_PASS}" | chpasswd
+  cat > /etc/vsftpd.conf <<FTPCFG
+listen=YES
+listen_ipv6=NO
+anonymous_enable=NO
+local_enable=YES
+write_enable=YES
+chroot_local_user=YES
+allow_writeable_chroot=YES
+local_root=${DOWNLOAD_DIR}
+pasv_enable=YES
+pasv_min_port=40000
+pasv_max_port=40100
+userlist_enable=YES
+userlist_deny=NO
+userlist_file=/etc/vsftpd.userlist
+FTPCFG
+  echo "${FTP_USER}" > /etc/vsftpd.userlist
+  $STD systemctl enable vsftpd
+  $STD systemctl restart vsftpd
+  msg_ok "FTP server configured (user: ${FTP_USER})"
+fi
+
 motd_ssh
 customize
 
@@ -267,6 +322,12 @@ echo "    URL:      http://$(hostname -I | awk '{print $1}')/" >> /etc/motd
 echo "    User:     ${RUTORRENT_USER}" >> /etc/motd
 echo "    Password: ${RUTORRENT_PASS}" >> /etc/motd
 echo "    Downloads: ${DOWNLOAD_DIR}" >> /etc/motd
+if [[ "${INSTALL_FTP}" == "1" && -n "${FTP_PASS}" ]]; then
+  echo "  FTP credentials:" >> /etc/motd
+  echo "    User:     ${FTP_USER}" >> /etc/motd
+  echo "    Password: ${FTP_PASS}" >> /etc/motd
+  echo "    Path:     ${DOWNLOAD_DIR}" >> /etc/motd
+fi
 
 msg_ok "ruTorrent ${RUTORRENT_VERSION} installation complete"
 msg_info "Access URL : http://$(hostname -I | awk '{print $1}')/"
