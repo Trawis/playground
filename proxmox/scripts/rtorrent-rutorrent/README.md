@@ -26,10 +26,38 @@ All prompts can be bypassed by setting variables before running:
 RUTORRENT_USER=admin \
 RUTORRENT_PLUGINS="autotools ratio unpack filemanager" \
 RUTORRENT_ENABLE_RPC2=0 \
+RUTORRENT_MAX_UPLOAD_MB=64 \
+INSTALL_FTP=0 \
 CHOWN_MOUNTS=0 \
 HDD_PATH=/mnt/data \
 bash rutorrent.sh
 ```
+
+---
+
+## Upload limits
+
+The installer sets a consistent upload limit across all three layers:
+
+| Layer | Setting | Default |
+|---|---|---|
+| ruTorrent filedrop plugin | `$maxfilesize` in `conf.php` | 32 MiB |
+| PHP-FPM | `upload_max_filesize` / `post_max_size` | 32 MiB |
+| nginx | `client_max_body_size` | 32 MiB |
+
+To change the limit, set `RUTORRENT_MAX_UPLOAD_MB` before running:
+
+```bash
+RUTORRENT_MAX_UPLOAD_MB=64 bash rutorrent.sh
+```
+
+Or select **Advanced** mode and enter the value when prompted.
+
+> **Nginx Proxy Manager users:** if you put ruTorrent behind NPM, you must also
+> set the upload limit there. In the NPM proxy host → Advanced tab, add:
+> ```nginx
+> client_max_body_size 32M;
+> ```
 
 ---
 
@@ -212,6 +240,32 @@ To change the password:
 pct exec <CTID> -- htpasswd /etc/nginx/.rutorrent.htpasswd <username>
 pct exec <CTID> -- systemctl restart nginx
 ```
+
+---
+
+## FTP access
+
+FTP (vsftpd) is **not installed by default** — it adds attack surface and is
+unnecessary for most setups.
+
+To enable:
+
+```bash
+INSTALL_FTP=1 bash rutorrent.sh
+```
+
+Or select **Advanced** mode and answer `y` to the FTP prompt.
+
+When enabled:
+
+- A **separate** FTP user (`rutorrentftp` by default) is created with its own
+  randomly-generated password. The ruTorrent web UI password is never reused.
+- The FTP user is chrooted to the download directory (`/data`).
+- Passive ports 40000–40100 are used (open these on your firewall/router).
+- FTP credentials are printed at the end of install and stored in `/etc/motd`.
+
+> **Prefer SFTP over SSH** (`ssh torrent@<ip>`) or direct bind-mounting as
+> alternatives — both avoid the complexity of running a separate FTP daemon.
 
 ---
 
