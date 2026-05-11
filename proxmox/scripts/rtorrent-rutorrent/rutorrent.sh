@@ -154,8 +154,12 @@ if [[ -z "${RUTORRENT_PLUGINS}" ]]; then
       _WHIP_ITEMS+=("${_PNAME}" "${_PDESC}" "${_PDEF}")
     done
 
+    _TERM_H="$(tput lines 2>/dev/null || echo 24)"
+    _MAX_BOX_H=$(( _TERM_H - 4 ))
     _LIST_H=$(( ${#PLUGIN_DEFS[@]} < 20 ? ${#PLUGIN_DEFS[@]} : 20 ))
     _BOX_H=$(( _LIST_H + 8 ))
+    (( _BOX_H > _MAX_BOX_H )) && _BOX_H=${_MAX_BOX_H}
+    (( _LIST_H > _BOX_H - 8 )) && _LIST_H=$(( _BOX_H - 8 ))
 
     _SEL="$(whiptail --title "ruTorrent — Plugin Selection" \
       --checklist "Space to toggle, Enter to confirm" \
