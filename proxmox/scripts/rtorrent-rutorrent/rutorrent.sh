@@ -134,8 +134,10 @@ if [[ -z "${RUTORRENT_PLUGINS}" ]]; then
     read -r -p "   Expose /RPC2 over nginx (XMLRPC access)? [y/N]: " _RPC2
     [[ "${_RPC2}" =~ ^[Yy]$ ]] && RUTORRENT_ENABLE_RPC2=1
 
-    read -r -p "   Recursively chown host mount path(s) to UID/GID 101000? [y/N]: " _CHOWN
-    [[ "${_CHOWN}" =~ ^[Yy]$ ]] && CHOWN_MOUNTS=1
+    if [[ -n "${HDD_PATH}" || -n "${HDD_PATHS}" ]]; then
+      read -r -p "   Recursively chown host mount path(s) to UID/GID 101000? [y/N]: " _CHOWN
+      [[ "${_CHOWN}" =~ ^[Yy]$ ]] && CHOWN_MOUNTS=1
+    fi
 
     read -r -p "   Max .torrent upload size in MiB [32]: " _UPLOAD_MB
     [[ "${_UPLOAD_MB}" =~ ^[0-9]+$ ]] && RUTORRENT_MAX_UPLOAD_MB="${_UPLOAD_MB}"
