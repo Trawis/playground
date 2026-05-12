@@ -1,0 +1,15 @@
+{
+  "type": "ct",
+  "name": "ruTorrent",
+  "category": 11,
+  "port": 80,
+  "os": "Debian 13",
+  "cpu": 2,
+  "ram": 2,
+  "disk": 8,
+  "description": "A front-end for the popular BitTorrent client rTorrent",
+  "notes": "Web UI login details are found in ~/rutorrent.creds inside the container. The /RPC2 XMLRPC endpoint is inactive by default; activation during setup is necessary for integrations with Sonarr, Radarr, or autodl-irssi",
+  "documentation": "https://github.com/Novik/ruTorrent/wiki",
+  "repository": "https://github.com/Novik/ruTorrent",
+  "config": "/var/www/rutorrent/conf/config.php"
+}
