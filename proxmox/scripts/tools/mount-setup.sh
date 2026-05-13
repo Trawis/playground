@@ -23,7 +23,7 @@ echo -e "${BLD}ruTorrent LXC — Mount Point Setup${RST}"
 echo "--------------------------------------"
 echo
 
-# ── 1. Pick a container ───────────────────────────────────────────────────────────────────────────────
+# ── 1. Pick a container ───────────────────────────────────────────────────────
 info "Available LXC containers:"
 pct list
 echo
@@ -34,7 +34,7 @@ pct status "${CTID}" &>/dev/null   || die "Container ${CTID} not found."
 CT_STATUS=$(pct status "${CTID}" | awk '{print $2}')
 info "Container ${CTID} is ${CT_STATUS}."
 
-# ── 2. Detect existing mount points ──────────────────────────────────────────────────────────────────────────
+# ── 2. Detect existing mount points ───────────────────────────────────────────
 NEXT_MP=0
 for i in $(seq 0 7); do
   if pct config "${CTID}" | grep -q "^mp${i}:"; then
@@ -43,19 +43,19 @@ for i in $(seq 0 7); do
 done
 info "Next available mount point index: mp${NEXT_MP}"
 
-# ── 3. Host path ────────────────────────────────────────────────────────────────────────────────────
+# ── 3. Host path ──────────────────────────────────────────────────────────────
 echo
 read -r -p "Host path to mount (e.g. /mnt/data): " HOST_PATH
 [[ -n "${HOST_PATH}" ]]    || die "Host path cannot be empty."
 [[ -d "${HOST_PATH}" ]]    || die "'${HOST_PATH}' does not exist on the host."
 
-# ── 4. Container path ───────────────────────────────────────────────────────────────────────────────
+# ── 4. Container path ─────────────────────────────────────────────────────────
 DEFAULT_CT_PATH="/data"
 [[ ${NEXT_MP} -gt 0 ]] && DEFAULT_CT_PATH="/data${NEXT_MP}"
 read -r -p "Container mount path [${DEFAULT_CT_PATH}]: " CT_PATH
 [[ -z "${CT_PATH}" ]] && CT_PATH="${DEFAULT_CT_PATH}"
 
-# ── 5. Detect filesystem — skip chown for network FS ─────────────────────────────────────────────────────
+# ── 5. Detect filesystem — skip chown for network FS ─────────────────────────
 FS_TYPE=$(findmnt -no FSTYPE "${HOST_PATH}" 2>/dev/null || echo "unknown")
 info "Detected filesystem: ${FS_TYPE}"
 
@@ -73,7 +73,7 @@ if [[ "${FS_TYPE}" =~ ^(cifs|nfs|nfs4|smb|fuse\.sshfs)$ ]]; then
   echo
 fi
 
-# ── 6. Resolve container torrent UID on the host ──────────────────────────────────────────────────────────
+# ── 6. Resolve container torrent UID on the host ──────────────────────────────
 if [[ ${NETWORK_FS} -eq 0 ]]; then
   # Read the LXC UID map from the container config
   UID_BASE=$(grep -E '^lxc\.idmap.*u' "/etc/pve/lxc/${CTID}.conf" 2>/dev/null \
@@ -109,7 +109,7 @@ if [[ ${NETWORK_FS} -eq 0 ]]; then
   fi
 fi
 
-# ── 7. Stop container if running ───────────────────────────────────────────────────────────────────────────────
+# ── 7. Stop container if running ──────────────────────────────────────────────
 echo
 if [[ "${CT_STATUS}" == "running" ]]; then
   read -r -p "Container is running. Stop it to apply the mount? [Y/n]: " DO_STOP
@@ -126,19 +126,19 @@ else
   RESTART_AFTER=0
 fi
 
-# ── 8. Apply the bind mount ─────────────────────────────────────────────────────────────────────────────────────
+# ── 8. Apply the bind mount ───────────────────────────────────────────────────
 info "Applying bind mount mp${NEXT_MP}: ${HOST_PATH} → ${CT_PATH}"
 pct set "${CTID}" "-mp${NEXT_MP}" "${HOST_PATH},mp=${CT_PATH}"
 ok "Bind mount configured."
 
-# ── 9. Start the container ───────────────────────────────────────────────────────────────────────────────────────
+# ── 9. Start the container ────────────────────────────────────────────────────
 if [[ "${RESTART_AFTER}" -eq 1 ]]; then
   info "Starting container ${CTID}..."
   pct start "${CTID}"
   ok "Container started."
 fi
 
-# ── 10. Summary ───────────────────────────────────────────────────────────────────────────────────────────────
+# ── 10. Summary ───────────────────────────────────────────────────────────────
 echo
 echo -e "${BLD}Done.${RST}"
 echo
