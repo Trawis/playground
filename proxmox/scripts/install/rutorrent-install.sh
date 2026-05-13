@@ -13,6 +13,7 @@ setting_up_container
 network_check
 update_os
 
+# Passed in from ct script via build.func environment
 RUTORRENT_USER="${RUTORRENT_USER:-rutorrent}"
 RUTORRENT_PASS="${RUTORRENT_PASS:-}"
 RUTORRENT_PLUGINS="${RUTORRENT_PLUGINS:-}"
@@ -54,6 +55,7 @@ msg_info "Setting up directories"
 mkdir -p /var/lib/rtorrent/{downloads,session,.watch}
 chown -R torrent:torrent /var/lib/rtorrent
 chmod 750 /var/lib/rtorrent
+# Chown any pre-mounted data directories — skip silently if absent or on network FS
 for i in "" 2 3 4 5 6 7 8; do
   mp="/data${i}"
   [[ -d "${mp}" ]] && chown torrent:torrent "${mp}" 2>/dev/null || true
@@ -86,14 +88,17 @@ msg_info "Generating plugins.ini"
 PLUGINS_DIR=/var/www/rutorrent/plugins
 PLUGINS_INI="/var/www/rutorrent/conf/plugins.ini"
 
+# Build lookup set of enabled slugs
 declare -A _ENABLED=()
 IFS=',' read -ra _SEL <<<"${RUTORRENT_PLUGINS}"
 for slug in "${_SEL[@]}"; do
   [[ -n "${slug}" ]] && _ENABLED["${slug}"]=1
 done
 
-for _internal in _task _getdir _noty _noty2; do
-  _ENABLED["${_internal}"]=1
+# All _-prefixed plugins are internal infrastructure — always enable them
+for plugin_dir in "${PLUGINS_DIR}"/_*/; do
+  slug=$(basename "${plugin_dir}")
+  [[ -f "${plugin_dir}/init.js" ]] && _ENABLED["${slug}"]=1
 done
 
 : >"${PLUGINS_INI}"
@@ -136,7 +141,7 @@ KillMode=none
 RuntimeDirectory=rtorrent
 RuntimeDirectoryMode=0750
 ExecStart=/usr/bin/screen -d -m -S rtorrent /usr/bin/rtorrent
-ExecStop=/usr/bin/bash -lc 'screen -S rtorrent -X quit || true'
+ExecStop=/usr/bin/bash -c 'screen -S rtorrent -X quit || true'
 WorkingDirectory=/var/lib/rtorrent
 Restart=on-failure
 RestartSec=5
@@ -191,6 +196,7 @@ pm.min_spare_servers = 1
 pm.max_spare_servers = 3
 php_admin_value[error_reporting] = E_ERROR
 EOF
+# Remove default www pool to avoid a duplicate / conflicting socket
 rm -f "${PHP_POOL_DIR}/www.conf"
 msg_ok "Configured PHP-FPM pool"
 
@@ -203,6 +209,7 @@ EOF
 msg_ok "Configured PHP upload limit (${RUTORRENT_MAX_UPLOAD_MB} MiB)"
 
 msg_info "Configuring nginx"
+# Build optional /RPC2 block
 if [[ "${RUTORRENT_ENABLE_RPC2}" == "yes" ]]; then
   RPC2_LOCATION="
     location /RPC2 {
@@ -224,13 +231,6 @@ server {
 
     client_max_body_size ${RUTORRENT_MAX_UPLOAD_MB}M;
 
-    set_real_ip_from 127.0.0.1;
-    set_real_ip_from 10.0.0.0/8;
-    set_real_ip_from 172.16.0.0/12;
-    set_real_ip_from 192.168.0.0/16;
-    real_ip_header X-Forwarded-For;
-    real_ip_recursive on;
-
     auth_basic "ruTorrent";
     auth_basic_user_file /etc/nginx/.rutorrent_htpasswd;
 ${RPC2_LOCATION}
@@ -244,7 +244,7 @@ ${RPC2_LOCATION}
         fastcgi_param SCRIPT_FILENAME \$document_root\$fastcgi_script_name;
     }
 
-    location ~ /\. {
+    location ~ /\.ht {
         deny all;
     }
 }
@@ -258,6 +258,7 @@ systemctl daemon-reload
 systemctl enable -q rtorrent
 systemctl start rtorrent
 
+# Wait up to 15 s for the rTorrent SCGI socket
 for i in {1..15}; do
   [[ -S /run/rtorrent/rtorrent.sock ]] && break
   sleep 1

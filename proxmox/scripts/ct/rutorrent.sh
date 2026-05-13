@@ -38,6 +38,7 @@ PLUGIN_DEFS=(
   "data|Data|on"
   "datadir|Data Dir|on"
   "diskspace|Disk Space|on"
+  "edit|Edit Tracker|on"
   "erasedata|Erase Data|on"
   "extratio|Extra Ratio|on"
   "extsearch|External Search|on"
@@ -47,6 +48,7 @@ PLUGIN_DEFS=(
   "history|History|on"
   "httprpc|HTTP RPC|on"
   "ipad|iPad|on"
+  "log_history|Log History|on"
   "loginmgr|Login Manager|on"
   "lookat|Look At|on"
   "mediainfo|Media Info|on"
@@ -62,6 +64,8 @@ PLUGIN_DEFS=(
   "source|Source|on"
   "spectrogram|Spectrogram|on"
   "theme|Theme|on"
+  "tracklabels|Track Labels|on"
+  "trackerstatus|Tracker Status|on"
   "trafic|Traffic|on"
   "unpack|Unpack|on"
   "xmpp|XMPP (broken: PHP 8 incompatible)|off"
@@ -71,9 +75,11 @@ PLUGIN_DEFS=(
   "retrackers|Retrackers|on"
   "rutracker_check|RuTracker Check|on"
   "uploadeta|Upload ETA|on"
+  "bulk_magnet|Bulk Magnet|on"
 )
 
 if [[ -z "${RUTORRENT_PLUGINS}" ]]; then
+  # Username
   RUTORRENT_USER=$(whiptail --inputbox \
     "ruTorrent web UI username:" 8 40 "rutorrent" \
     --title "Username" 3>&1 1>&2 2>&3) || exit
@@ -83,6 +89,7 @@ if [[ -z "${RUTORRENT_PLUGINS}" ]]; then
     "ruTorrent web UI password:\n\n(leave blank to generate a random password)" \
     10 55 "" --title "Password" 3>&1 1>&2 2>&3) || exit
 
+  # Plugin checklist — clamp list height to terminal
   TERM_LINES=$(tput lines 2>/dev/null || echo 24)
   MAX_VISIBLE=$(( TERM_LINES - 8 ))
   [[ ${MAX_VISIBLE} -lt 5 ]] && MAX_VISIBLE=5
@@ -101,6 +108,7 @@ if [[ -z "${RUTORRENT_PLUGINS}" ]]; then
 
   RUTORRENT_PLUGINS=$(echo "${SELECTED}" | tr -d '"' | tr ' ' ',')
 
+  # /RPC2 endpoint
   if whiptail --yesno \
     "Enable /RPC2 endpoint?\n\n(required for Sonarr, Radarr, autodl-irssi)" \
     10 55 --title "XMLRPC Endpoint" --defaultno 3>&1 1>&2 2>&3; then
@@ -109,6 +117,7 @@ if [[ -z "${RUTORRENT_PLUGINS}" ]]; then
     RUTORRENT_ENABLE_RPC2="no"
   fi
 
+  # Upload size limit
   RUTORRENT_MAX_UPLOAD_MB=$(whiptail --inputbox \
     "Maximum upload file size in MiB:\n\n(applied to filedrop, PHP, and nginx)" \
     10 55 "32" --title "Upload Limit" 3>&1 1>&2 2>&3) || exit
@@ -116,20 +125,20 @@ if [[ -z "${RUTORRENT_PLUGINS}" ]]; then
 
 fi
 
+# Apply defaults for non-interactive / pre-seeded runs
 RUTORRENT_USER="${RUTORRENT_USER:-rutorrent}"
 RUTORRENT_PASS="${RUTORRENT_PASS:-}"
 RUTORRENT_ENABLE_RPC2="${RUTORRENT_ENABLE_RPC2:-no}"
 RUTORRENT_MAX_UPLOAD_MB="${RUTORRENT_MAX_UPLOAD_MB:-32}"
 
+# Strip plugins that require a privileged container when running unprivileged.
 PRIVILEGED_ONLY_PLUGINS=()
 if [[ "${var_unprivileged}" == "1" ]] && [[ ${#PRIVILEGED_ONLY_PLUGINS[@]} -gt 0 ]]; then
   for plugin in "${PRIVILEGED_ONLY_PLUGINS[@]}"; do
     if [[ ",${RUTORRENT_PLUGINS}," == *",${plugin},"* ]]; then
       msg_warn "Plugin '${plugin}' requires a privileged container — disabling."
-      RUTORRENT_PLUGINS="${RUTORRENT_PLUGINS//${plugin}/}"
-      RUTORRENT_PLUGINS="${RUTORRENT_PLUGINS//,,/,}"
-      RUTORRENT_PLUGINS="${RUTORRENT_PLUGINS#,}"
-      RUTORRENT_PLUGINS="${RUTORRENT_PLUGINS%,}"
+      RUTORRENT_PLUGINS=$(printf '%s' ",${RUTORRENT_PLUGINS}," \
+        | sed "s/,${plugin},/,/g" | sed 's/^,//;s/,$//')
     fi
   done
 fi
@@ -162,7 +171,7 @@ function update_script() {
   fi
 
   msg_info "Updating ruTorrent ${CURRENT} → ${LATEST}"
-  $STD git -C /var/www/rutorrent fetch --tags --force
+  $STD git -C /var/www/rutorrent fetch --depth 1 origin "refs/tags/${LATEST}:refs/tags/${LATEST}"
   $STD git -C /var/www/rutorrent checkout "${LATEST}"
   echo "${LATEST}" >/var/www/rutorrent/version.txt
   chown -R www-data:www-data /var/www/rutorrent
