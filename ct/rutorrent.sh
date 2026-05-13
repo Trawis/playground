@@ -29,12 +29,7 @@ catch_errors
 
 # Plugin catalogue — each entry: "slug|Display Label|default(on/off)"
 PLUGIN_DEFS=(
-  "_task|_task (internal dependency)|on"
-  "_getdir|_getdir (internal dependency)|on"
-  "_noty|_noty (internal dependency)|on"
-  "_noty2|_noty2 (internal dependency)|on"
   "autotools|AutoTools|on"
-  "bulk_magnet|Bulk Magnet|on"
   "check_port|Check Port|on"
   "chunks|Chunks|on"
   "cookies|Cookies|on"
@@ -43,27 +38,25 @@ PLUGIN_DEFS=(
   "data|Data|on"
   "datadir|Data Dir|on"
   "diskspace|Disk Space|on"
+  "edit|Edit Tracker|on"
   "erasedata|Erase Data|on"
   "extratio|Extra Ratio|on"
   "extsearch|External Search|on"
   "feeds|Feeds|on"
   "filedrop|File Drop|on"
-  "filemanager|File Manager|on"
-  "filemanager-media|File Manager Media|on"
   "geoip|GeoIP|on"
   "history|History|on"
   "httprpc|HTTP RPC|on"
   "ipad|iPad|on"
+  "log_history|Log History|on"
   "loginmgr|Login Manager|on"
   "lookat|Look At|on"
   "mediainfo|Media Info|on"
   "ratio|Ratio|on"
   "ratiocolor|Ratio Color|on"
-  "retrackers|Retrackers|on"
   "rpc|RPC|on"
   "rss|RSS|on"
   "rssurlrewrite|RSS URL Rewrite|on"
-  "rutracker_check|RuTracker Check|on"
   "scheduler|Scheduler|on"
   "screenshots|Screenshots|on"
   "seedingtime|Seeding Time|on"
@@ -71,13 +64,18 @@ PLUGIN_DEFS=(
   "source|Source|on"
   "spectrogram|Spectrogram|on"
   "theme|Theme|on"
+  "tracklabels|Track Labels|on"
+  "trackerstatus|Tracker Status|on"
   "trafic|Traffic|on"
   "unpack|Unpack|on"
-  "uploadeta|Upload ETA|on"
   "xmpp|XMPP (broken: PHP 8 incompatible)|off"
   "_cloudflare|Cloudflare|on"
   "dump|Dump (dumptorrent not in Debian 13 repos)|off"
   "throttle|Throttle (broken: old rTorrent API)|off"
+  "retrackers|Retrackers|on"
+  "rutracker_check|RuTracker Check|on"
+  "uploadeta|Upload ETA|on"
+  "bulk_magnet|Bulk Magnet|on"
 )
 
 if [[ -z "${RUTORRENT_PLUGINS}" ]]; then
@@ -119,6 +117,15 @@ if [[ -z "${RUTORRENT_PLUGINS}" ]]; then
     RUTORRENT_ENABLE_RPC2="no"
   fi
 
+  # Real IP (reverse proxy)
+  if whiptail --yesno \
+    "Enable real IP forwarding?\n\n(only needed if nginx is behind a reverse proxy\nsuch as Traefik, Cloudflare, or NPM)" \
+    11 60 --title "Real IP" --defaultno 3>&1 1>&2 2>&3; then
+    RUTORRENT_ENABLE_REAL_IP="yes"
+  else
+    RUTORRENT_ENABLE_REAL_IP="no"
+  fi
+
   # Upload size limit
   RUTORRENT_MAX_UPLOAD_MB=$(whiptail --inputbox \
     "Maximum upload file size in MiB:\n\n(applied to filedrop, PHP, and nginx)" \
@@ -131,23 +138,23 @@ fi
 RUTORRENT_USER="${RUTORRENT_USER:-rutorrent}"
 RUTORRENT_PASS="${RUTORRENT_PASS:-}"
 RUTORRENT_ENABLE_RPC2="${RUTORRENT_ENABLE_RPC2:-no}"
+RUTORRENT_ENABLE_REAL_IP="${RUTORRENT_ENABLE_REAL_IP:-no}"
 RUTORRENT_MAX_UPLOAD_MB="${RUTORRENT_MAX_UPLOAD_MB:-32}"
 
 # Strip plugins that require a privileged container when running unprivileged.
+# Add slug names to PRIVILEGED_ONLY_PLUGINS as needed.
 PRIVILEGED_ONLY_PLUGINS=()
 if [[ "${var_unprivileged}" == "1" ]] && [[ ${#PRIVILEGED_ONLY_PLUGINS[@]} -gt 0 ]]; then
   for plugin in "${PRIVILEGED_ONLY_PLUGINS[@]}"; do
     if [[ ",${RUTORRENT_PLUGINS}," == *",${plugin},"* ]]; then
       msg_warn "Plugin '${plugin}' requires a privileged container — disabling."
-      RUTORRENT_PLUGINS="${RUTORRENT_PLUGINS//${plugin}/}"
-      RUTORRENT_PLUGINS="${RUTORRENT_PLUGINS//,,/,}"
-      RUTORRENT_PLUGINS="${RUTORRENT_PLUGINS#,}"
-      RUTORRENT_PLUGINS="${RUTORRENT_PLUGINS%,}"
+      RUTORRENT_PLUGINS=$(printf '%s' ",${RUTORRENT_PLUGINS}," \
+        | sed "s/,${plugin},/,/g" | sed 's/^,//;s/,$//')
     fi
   done
 fi
 
-export RUTORRENT_USER RUTORRENT_PASS RUTORRENT_PLUGINS RUTORRENT_ENABLE_RPC2 RUTORRENT_MAX_UPLOAD_MB
+export RUTORRENT_USER RUTORRENT_PASS RUTORRENT_PLUGINS RUTORRENT_ENABLE_RPC2 RUTORRENT_ENABLE_REAL_IP RUTORRENT_MAX_UPLOAD_MB
 
 function update_script() {
   header_info
@@ -175,7 +182,7 @@ function update_script() {
   fi
 
   msg_info "Updating ruTorrent ${CURRENT} → ${LATEST}"
-  $STD git -C /var/www/rutorrent fetch --tags --force
+  $STD git -C /var/www/rutorrent fetch --depth 1 origin "refs/tags/${LATEST}:refs/tags/${LATEST}"
   $STD git -C /var/www/rutorrent checkout "${LATEST}"
   echo "${LATEST}" >/var/www/rutorrent/version.txt
   chown -R www-data:www-data /var/www/rutorrent
