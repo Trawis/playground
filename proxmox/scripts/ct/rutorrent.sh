@@ -6,7 +6,7 @@ source <(curl -fsSL https://raw.githubusercontent.com/community-scripts/ProxmoxV
 # Source: https://github.com/Novik/ruTorrent
 
 APP="ruTorrent"
-var_tags="${var_tags:-torrent;bittorrent;rtorrent}"
+var_tags="${var_tags:-torrent;bittorrent;download}"
 var_cpu="${var_cpu:-2}"
 var_ram="${var_ram:-2048}"
 var_disk="${var_disk:-8}"
@@ -14,13 +14,6 @@ var_os="${var_os:-debian}"
 var_version="${var_version:-13}"
 var_unprivileged="${var_unprivileged:-1}"
 var_nesting="${var_nesting:-0}"
-var_fuse="${var_fuse:-no}"
-var_tun="${var_tun:-no}"
-var_gpu="${var_gpu:-no}"
-var_keyctl="${var_keyctl:-0}"
-var_mknod="${var_mknod:-0}"
-var_protection="${var_protection:-no}"
-var_ssh="${var_ssh:-no}"
 
 header_info "$APP"
 variables
@@ -144,21 +137,9 @@ RUTORRENT_PASS="${RUTORRENT_PASS:-}"
 RUTORRENT_ENABLE_RPC2="${RUTORRENT_ENABLE_RPC2:-no}"
 RUTORRENT_ENABLE_REAL_IP="${RUTORRENT_ENABLE_REAL_IP:-no}"
 RUTORRENT_MAX_UPLOAD_MB="${RUTORRENT_MAX_UPLOAD_MB:-32}"
+RUTORRENT_SERVICE_USER="torrent"
 
-# Strip plugins that require a privileged container when running unprivileged.
-# Add slug names to PRIVILEGED_ONLY_PLUGINS as needed.
-PRIVILEGED_ONLY_PLUGINS=()
-if [[ "${var_unprivileged}" == "1" ]] && [[ ${#PRIVILEGED_ONLY_PLUGINS[@]} -gt 0 ]]; then
-  for plugin in "${PRIVILEGED_ONLY_PLUGINS[@]}"; do
-    if [[ ",${RUTORRENT_PLUGINS}," == *",${plugin},"* ]]; then
-      msg_warn "Plugin '${plugin}' requires a privileged container — disabling."
-      RUTORRENT_PLUGINS=$(printf '%s' ",${RUTORRENT_PLUGINS}," \
-        | sed "s/,${plugin},/,/g" | sed 's/^,//;s/,$//')
-    fi
-  done
-fi
-
-export RUTORRENT_USER RUTORRENT_PASS RUTORRENT_PLUGINS RUTORRENT_ENABLE_RPC2 RUTORRENT_ENABLE_REAL_IP RUTORRENT_MAX_UPLOAD_MB
+export RUTORRENT_USER RUTORRENT_PASS RUTORRENT_PLUGINS RUTORRENT_ENABLE_RPC2 RUTORRENT_ENABLE_REAL_IP RUTORRENT_MAX_UPLOAD_MB RUTORRENT_SERVICE_USER
 
 function update_script() {
   header_info
@@ -170,27 +151,25 @@ function update_script() {
     exit
   fi
 
-  msg_info "Checking for ruTorrent Update"
-  CURRENT=$(cat /var/www/rutorrent/version.txt 2>/dev/null || echo "unknown")
-  LATEST=$(curl -fsSL https://api.github.com/repos/Novik/ruTorrent/releases/latest \
-    | grep '"tag_name"' | cut -d'"' -f4)
+  if check_for_gh_release "rutorrent" "Novik/ruTorrent"; then
+    msg_info "Backing up ruTorrent configuration"
+    cp /var/www/rutorrent/conf/config.php /tmp/rutorrent-config.php 2>/dev/null || true
+    cp /var/www/rutorrent/conf/plugins.ini /tmp/rutorrent-plugins.ini 2>/dev/null || true
+    msg_ok "Backed up ruTorrent configuration"
 
-  if [[ -z "${LATEST}" ]]; then
-    msg_error "Unable to determine latest ruTorrent release."
-    exit
+    CLEAN_INSTALL=1 fetch_and_deploy_gh_release "rutorrent" "Novik/ruTorrent" "tarball" "latest" "/var/www/rutorrent"
+
+    msg_info "Restoring ruTorrent configuration"
+    [[ -f /tmp/rutorrent-config.php ]] && cp /tmp/rutorrent-config.php /var/www/rutorrent/conf/config.php
+    [[ -f /tmp/rutorrent-plugins.ini ]] && cp /tmp/rutorrent-plugins.ini /var/www/rutorrent/conf/plugins.ini
+    rm -f /tmp/rutorrent-config.php /tmp/rutorrent-plugins.ini
+    chown -R www-data:www-data /var/www/rutorrent
+    msg_ok "Restored ruTorrent configuration"
+
+    msg_ok "Updated ${APP} successfully"
   fi
 
-  if [[ "${CURRENT}" == "${LATEST}" ]]; then
-    msg_ok "ruTorrent is already up to date (${CURRENT})"
-    exit
-  fi
-
-  msg_info "Updating ruTorrent ${CURRENT} → ${LATEST}"
-  $STD git -C /var/www/rutorrent fetch --depth 1 origin "refs/tags/${LATEST}:refs/tags/${LATEST}"
-  $STD git -C /var/www/rutorrent checkout "${LATEST}"
-  echo "${LATEST}" >/var/www/rutorrent/version.txt
-  chown -R www-data:www-data /var/www/rutorrent
-  msg_ok "Updated ruTorrent to ${LATEST}"
+  cleanup_lxc
   exit
 }
 
