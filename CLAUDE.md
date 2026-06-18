@@ -1,6 +1,6 @@
 # CLAUDE.md
 
-@AGENTS.md
+@repo/AGENTS.md
 
 ## Claude Code
 
