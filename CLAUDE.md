@@ -1,6 +1,6 @@
 # CLAUDE.md
 
-@repo/AGENTS.md
+@project-seed/AGENTS.md
 
 ## Claude Code
 
