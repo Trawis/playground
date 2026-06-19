@@ -24,6 +24,13 @@ Use newest entries first. Do not dump raw git commits here.
 ### Security
 - 
 
+## 1.18.0 - 2026-06-18
+
+### Changed
+- Clarified C# control-flow convention: single-statement guard clauses may omit braces when the controlled statement is on the next line.
+- Updated `.editorconfig` to prefer braces only for multiline control blocks.
+- Replaced project-specific terminal/output examples with generic examples.
+
 ## 1.17.0 - 2026-06-18
 
 ### Added
@@ -46,7 +53,7 @@ Use newest entries first. Do not dump raw git commits here.
 
 ### Added
 - Added explicit C# control-flow convention forbidding inline guard statements such as `if (...) return ...;`.
-- Added examples showing `return` and `throw` on their own line inside braces.
+- Added examples showing `return` and `throw` on their own line instead of inline after the condition.
 
 ### Changed
 - Updated C# quick reference to mention no inline control-flow statements.
