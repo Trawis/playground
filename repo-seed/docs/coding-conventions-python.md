@@ -2,7 +2,7 @@
 
 Python-specific conventions for standalone scripts.
 
-**Version**: 1.22  
+**Version**: 1.24  
 **Status**: Active  
 **Last Updated**: 2026-06-19
 
@@ -51,6 +51,17 @@ Rules:
 - Prefer clear exceptions and user-facing error messages.
 - Avoid broad `except Exception` unless the error is logged/reported and re-raised or converted to a clear exit code.
 - Avoid mutable default argument values.
+
+---
+
+## Comments and Docstrings
+
+- Use comments for intent, edge cases, safety constraints, non-obvious parsing, filesystem behavior, or external command assumptions.
+- Do not comment obvious code.
+- Use docstrings for public functions or reusable helpers when behavior, parameters, return values, or side effects are not obvious.
+- Do not add docstrings to every small private helper by default.
+- Keep module headers and summaries short.
+- Prefer clearer names and smaller functions over explanatory comments around complex code.
 
 ---
 

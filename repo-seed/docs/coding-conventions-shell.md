@@ -2,7 +2,7 @@
 
 Shell-specific conventions for standalone scripts.
 
-**Version**: 1.22  
+**Version**: 1.24  
 **Status**: Active  
 **Last Updated**: 2026-06-19
 
@@ -51,6 +51,15 @@ main "$@"
 - Prefer `--dry-run` for scripts that copy, move, rename, delete, sync, or rewrite files.
 - Do not embed secrets, tokens, credentials, or machine-specific absolute paths.
 - Do not overwrite files silently unless the script documents the behavior and accepts an explicit option such as `--force`.
+
+---
+
+## Comments and Help Text
+
+- Comment safety-sensitive operations, non-obvious shell behavior, platform assumptions, and external command requirements.
+- Do not comment obvious assignments, simple `if` checks, or straightforward commands.
+- Keep usage/help text concise. Include options, examples, and warnings for destructive behavior.
+- Do not add wide banner comments unless the script already uses them.
 
 ---
 
