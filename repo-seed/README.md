@@ -56,15 +56,33 @@ Add examples for common usage.
 - [`FEATURES.md`](FEATURES.md) — feature state
 - [`docs/coding-conventions-csharp.md`](docs/coding-conventions-csharp.md) — C#/.NET conventions
 - [`docs/coding-conventions-scripts.md`](docs/coding-conventions-scripts.md) — script conventions
-
 - [`.editorconfig`](.editorconfig) — baseline formatting/style configuration
 - [`.github/pull_request_template.md`](.github/pull_request_template.md) — pull request checklist
 - [`docs/fsd-template.md`](docs/fsd-template.md) — Functional Specification Document template
 - [`docs/tsd-template.md`](docs/tsd-template.md) — Technical Specification Document template
 - [`docs/gdd-template.md`](docs/gdd-template.md) — Game Design Document template
+- [`scripts/sync-agent-guidelines.py`](scripts/sync-agent-guidelines.py) — sync this pack from `repo-seed` into other repositories
+- [`.agent-guidelines-version`](.agent-guidelines-version) — synced guideline pack version marker
 
 
-Core pack rules include instruction strictness levels, no AI/model names in Git artifacts, indentation preservation for existing files, user-facing text/output style preservation, no inline C# guard statements, and C# blank-line spacing after completed control blocks.
+Core pack rules include instruction strictness levels, strict Git Flow branch families, mandatory PR creation/proposal behavior, no AI/model names in Git artifacts, repo-seed sync workflow with stable script filename, indentation preservation for existing files, user-facing text/output style preservation, C# guard clauses with statements on the next line, and C# blank-line spacing after completed control blocks.
+
+## Syncing Into Other Repositories
+
+Use `repo-seed` as the central source repository for this pack, then sync a committed snapshot into each target repository.
+
+```bash
+python /path/to/repo-seed/scripts/sync-agent-guidelines.py --source /path/to/repo-seed --target /path/to/target-repo --dry-run
+python /path/to/repo-seed/scripts/sync-agent-guidelines.py --source /path/to/repo-seed --target /path/to/target-repo
+```
+
+Routine syncs should use a strict Git Flow branch such as:
+
+```text
+feature/sync-agent-guidelines-1-22-0
+```
+
+Then open a PR into `develop`. Do not auto-merge.
 
 ## Known Limitations
 

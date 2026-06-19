@@ -2,18 +2,14 @@
 
 Repository-level instructions for AI coding agents.
 
-**Version**: 1.18  
+**Version**: 1.22  
 **Status**: Active  
-**Last Updated**: 2026-06-18
+**Last Updated**: 2026-06-19
 
 **Recent changes**:
-- Added `MUST` / `SHOULD` / `MAY` strictness levels.
-- Added rule that Git artifacts and PR text must not contain AI assistant, tool, or model names.
-- Clarified that indentation should preserve the existing file/repository style.
-- Clarified C# control-flow style: single-statement guards may omit braces, but the statement must be on the next line.
-- Added rule to preserve existing Unicode/ASCII punctuation and UI/output separator style.
-- Added C# spacing rule requiring a blank line after a completed control block before the next independent statement.
-- Softened Git Flow and PR requirements for local-only or solo repositories while keeping branch isolation and no auto-merge.
+- Renamed the repo-seed sync script to the stable path `scripts/sync-agent-guidelines.py` so Git history tracks changes cleanly.
+- Clarified that repo-maintained scripts use stable filenames; versioned suffixes are for distributed copies, generated outputs, and archive artifacts.
+- Kept sync branches versioned with the pack version, for example `feature/sync-agent-guidelines-1-22-0`.
 
 ---
 
@@ -21,6 +17,9 @@ Repository-level instructions for AI coding agents.
 
 | Version | Date | Changes |
 |---------|------|---------|
+| 1.22 | 2026-06-19 | Renamed the repo-seed sync script to a stable filename and clarified script filename/versioning guidance. |
+| 1.21 | 2026-06-19 | Enforced strict Git Flow branch families and added repo-seed sync workflow/script guidance. |
+| 1.19 | 2026-06-19 | Unified branch prefix selection, PR creation/proposal behavior, and fallback PR reporting. |
 | 1.18 | 2026-06-18 | Clarified that single-statement C# guards may omit braces when the statement is on the next line; replaced project-specific terminal examples with generic examples. |
 | 1.17 | 2026-06-18 | Added C# spacing rule requiring a blank line after a completed control block before the next independent statement. |
 | 1.16 | 2026-06-18 | Added UI/output text style preservation rule for Unicode/ASCII punctuation and decorative separators. |
@@ -42,7 +41,7 @@ Use these levels when applying this file:
 Defaults:
 
 - Safety, secrets, destructive commands, branch protection, no auto-merge, and honesty about validation are `MUST`.
-- Code style, formatting preferences, Git Flow ceremony, and documentation updates are usually `SHOULD` unless the repository makes them mandatory.
+- Code style, formatting preferences, and documentation updates are usually `SHOULD` unless the repository makes them mandatory. Git Flow branch family and PR-target rules are `MUST` when this pack is used as the repository workflow source of truth.
 - New child `AGENTS.md` files, new convention files, extra templates, and stricter automation are `MAY` unless requested.
 
 When a rule is too strict for a solo/local repository, keep the intent: isolate the change, document the intended branch/PR, validate what is practical, and never pretend unavailable workflow steps were completed.
@@ -232,6 +231,41 @@ python script-name_1.0.0.py --help
 Do not add or run irrelevant commands for stacks that are not present in the repository.
 
 ---
+
+## Syncing This Pack from `repo-seed`
+
+For multiple repositories, keep the latest approved guideline pack in a central repository such as `repo-seed`, then sync a committed snapshot into each target repository.
+
+Rules:
+
+- The target repository must contain local committed copies of the applicable guideline files before agents begin work.
+- Do not rely on agents dynamically fetching instructions at task runtime.
+- Use `repo-seed` as the central source of truth for this generic pack unless a target repository has more specific local rules.
+- Syncing must not auto-commit, auto-push, create a PR, or auto-merge.
+- Syncing should be done on a normal task branch and reviewed through the repository PR workflow.
+- Do not overwrite project-specific `README.md`, `CHANGELOG.md`, or `FEATURES.md` during routine sync unless explicitly requested.
+- Do not overwrite child `AGENTS.md` files in subdirectories. Root `AGENTS.md` is the synced baseline; child files remain project/module-specific.
+- Track the synced pack version in `.agent-guidelines-version`.
+
+Recommended sync command from a target repository:
+
+```bash
+python /path/to/repo-seed/scripts/sync-agent-guidelines.py --source /path/to/repo-seed --target . --dry-run
+python /path/to/repo-seed/scripts/sync-agent-guidelines.py --source /path/to/repo-seed --target .
+```
+
+Recommended branch for syncing this pack into another repository:
+
+```text
+feature/sync-agent-guidelines-1-22-0
+```
+
+Recommended PR title:
+
+```text
+Sync agent guidelines 1.22.0
+```
+
 
 ## Project Structure
 
@@ -430,48 +464,99 @@ Future convention files can be added for TypeScript, Python applications, Go, Ru
 
 ## Git Workflow
 
-Use Git Flow when the repository supports it. For small solo/local repositories, keep the intent of Git Flow: isolate work on a task branch, target the correct base branch when available, and never auto-merge without explicit instruction.
+Use strict Git Flow when this pack is the repository workflow source of truth. Normal work must flow through `develop`; `main` is reserved for released/production-ready code.
+
+For small solo/local repositories, keep the same branch families and target rules when possible. If the environment cannot create branches or PRs, report the intended branch name, source branch, target branch, PR title, PR description, and validation summary.
 
 ### Long-Lived Branches
 
-- `main` is the production branch.
-- `develop` is the integration branch.
-- If `main` does not exist and branch creation is part of the task/workflow, create it from the current default branch.
+- `main` is the production/release branch.
+- `develop` is the default integration branch and the default hosted-repository branch when Git Flow is used.
+- Normal feature work targets `develop`, not `main`.
+- If `main` does not exist and branch setup is part of the task/workflow, create it from the current default branch.
 - If `develop` does not exist and Git Flow is being used for the repository, create it from `main`.
 - Do not delete, rename, or force-push long-lived branches.
 
-### Task Branches
+### Strict Git Flow Branch Families
 
-Create a new branch for work whenever the environment allows it. Never commit directly to `main`, `develop`, `release/*`, or `hotfix/*` unless the task is explicitly branch setup or the repository/environment has no branch workflow available.
+Use only these branch families unless a repository-specific `AGENTS.md` explicitly overrides this rule:
 
-Branch naming:
+| Branch family | Base branch | PR target | Use for |
+|---------------|-------------|-----------|---------|
+| `feature/*` | `develop` | `develop` | All normal planned work, including implementation, docs, tests, refactors, tooling, and non-emergency fixes |
+| `release/*` | `develop` | `main` | Release preparation, version bumps, release notes, final release stabilization |
+| `hotfix/*` | `main` | `main` | Urgent fixes for production/released code |
+
+Do not create `docs/*`, `test/*`, `refactor/*`, `chore/*`, or `bugfix/*` branches in strict Git Flow mode. Use `feature/*` for normal work, even when the change is documentation-only, test-only, maintenance, refactoring, or a non-emergency bug fix.
+
+### Branch Naming
+
+Normal task branches MUST use this pattern:
 
 ```text
-feature/<short-description>
-bugfix/<short-description>
-release/<version>
-hotfix/<short-description>
-chore/<short-description>
-docs/<short-description>
+feature/<short-kebab-description>
 ```
 
-Branch source rules:
+Release branches MUST use this pattern:
 
-- `feature/*`, `bugfix/*`, `chore/*`, and `docs/*` branch from `develop`.
-- `release/*` branches from `develop`.
-- `hotfix/*` branches from `main`.
+```text
+release/<major>.<minor>.<patch>
+```
 
-Use lowercase kebab-case for branch descriptions.
+Urgent production hotfix branches MUST use this pattern:
+
+```text
+hotfix/<short-kebab-description>
+```
+
+Use lowercase kebab-case for branch descriptions. Do not include dates, usernames, AI/model/tool names, vague words like `changes`, `updates`, `fixes`, `final`, or `wip`, unless they are part of a real issue key or release version.
 
 Examples:
 
 ```text
 feature/add-order-export
-bugfix/fix-order-status-validation
-chore/update-editorconfig
-docs/update-agent-guidelines
-release/1.4.0
+feature/update-agent-guidelines
+feature/add-order-export-tests
+feature/refactor-order-validation
+feature/sync-agent-guidelines-1-22-0
+release/1.22.0
 hotfix/fix-login-crash
+```
+
+### Pull Request Rules
+
+Every task branch MUST create or propose a pull request. Agents must not randomly skip PR creation based on preference.
+
+- If the platform/repository supports PR creation, create a PR for the completed task branch.
+- If PR creation is not available, provide exact PR instructions instead of pretending a PR exists.
+- Do not auto-merge pull requests.
+- Do not approve your own pull request when review/approval features exist.
+- Do not bypass branch protection.
+- For local-only or solo experimental repositories where hosted PRs are unavailable, still keep changes isolated on a branch when possible and report the intended PR details.
+
+Default PR targets:
+
+- `feature/*` targets `develop`.
+- `release/*` targets `main`; after the release is merged, release changes must also be brought back to `develop` through a separate PR or approved merge process.
+- `hotfix/*` targets `main`; after the hotfix is merged, the fix must also be brought back to `develop` or the active `release/*` branch through a separate PR or approved merge process.
+
+PR titles should use a concise imperative phrase without branch prefixes, issue clutter, or AI/model/tool names.
+
+Good PR titles:
+
+```text
+Add order export validation
+Fix payment status mapping
+Sync agent guidelines 1.22.0
+```
+
+Avoid PR titles like:
+
+```text
+feature/add-order-export
+Chore updates
+AI generated changes
+Final fixes
 ```
 
 ### No AI Names in Git Artifacts
@@ -495,22 +580,6 @@ Write Git artifacts as if authored by the repository maintainer. Describe the ac
 
 Allowed exception: files whose purpose is AI-agent configuration or documentation, such as `AGENTS.md` and `CLAUDE.md`, may reference agent/tool names where technically necessary.
 
-
-### Pull Request Rules
-
-- Create or propose a pull request for completed work when the platform/repository workflow supports it.
-- Do not auto-merge pull requests.
-- Do not approve your own pull request when review/approval features exist.
-- Do not bypass branch protection.
-- For local-only or solo experimental repositories where hosted PRs are unavailable, still keep changes isolated on a branch when possible and report the intended PR title/body.
-- If the environment cannot create a branch or PR, report the intended branch name, target branch, PR title, PR description, and validation summary.
-
-Default PR targets:
-
-- `feature/*`, `bugfix/*`, `chore/*`, and `docs/*` target `develop`.
-- `release/*` targets `main`, then the final release changes must also be brought back to `develop` through a separate PR or approved merge process.
-- `hotfix/*` targets `main`, then the hotfix must also be brought back to `develop` or the active `release/*` branch through a separate PR or approved merge process.
-
 ### Commit Rules
 
 - Keep commits focused and logically grouped.
@@ -523,7 +592,7 @@ Examples:
 ```text
 Add order export validation
 Fix enum mapping for payment status
-Update agent guidelines
+Sync agent guidelines
 ```
 
 ---
@@ -654,7 +723,9 @@ Before finishing a task, confirm:
 - `README.md`, `CHANGELOG.md`, `FEATURES.md`, or `docs/` were updated when the change affected public behavior, setup, commands, features, versioned output, specifications, or documented limitations.
 - `.editorconfig` impact was considered when changing formatting/style conventions.
 - The repository PR template was used when creating or proposing a pull request.
+- Branch family follows strict Git Flow: `feature/*`, `release/*`, or `hotfix/*`.
 - A pull request was created, or exact PR instructions were provided.
+- PR title, branch name, source branch, and target branch follow the strict Git Flow conventions.
 - Branch names, commit messages, PR text, changelog entries, release notes, and helper text do not contain AI assistant/model/tool names.
 - The PR was not auto-merged.
 
@@ -686,6 +757,12 @@ Use `.github/pull_request_template.md` when it exists. Otherwise, use this struc
 - [ ] Smoke/manual check where practical
 - [ ] Implementation rechecked against requirements
 - [ ] Format/lint
+
+## Branching / Merge Safety
+- [ ] Branch name follows `feature/<short-kebab-description>`, `release/<version>`, or `hotfix/<short-kebab-description>`
+- [ ] Branch family follows strict Git Flow
+- [ ] PR targets the correct Git Flow branch
+- [ ] No auto-merge requested/performed
 
 ## Notes / Risks
 - 
@@ -723,5 +800,5 @@ Detailed style rules belong in separate files under `docs/`.
 
 - `AGENTS.md` is a repository-level instruction file for coding agents.
 - Codex reads `AGENTS.md` files before doing work and supports project-level instruction layering.
-- Git Flow uses `main`, `develop`, `feature/*`, `release/*`, and `hotfix/*` branches.
+- Strict Git Flow uses `main`, `develop`, `feature/*`, `release/*`, and `hotfix/*` branches. In this pack, normal work uses `feature/*` only.
 - Visual Studio Remove and Sort Usings should be the default using-directive cleanup behavior for C# repositories.
