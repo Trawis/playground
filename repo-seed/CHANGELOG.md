@@ -24,6 +24,40 @@ Use newest entries first. Do not dump raw git commits here.
 ### Security
 - 
 
+## 1.22.0 - 2026-06-19
+
+### Changed
+- Renamed the repo-seed sync script from a versioned filename to the stable path `scripts/sync-agent-guidelines.py` so Git history tracks script changes cleanly.
+- Clarified script filename/versioning guidance: scripts committed to a repository should use stable filenames, while distributed standalone copies, generated output files, and archive artifacts may use semantic-version suffixes.
+- Updated sync examples, README links, and managed-file manifest paths to use the stable sync script name.
+
+## 1.21.0 - 2026-06-19
+
+### Added
+- Added `scripts/sync-agent-guidelines.py` for syncing this pack from `repo-seed` into other repositories.
+- Added `.agent-guidelines-version` to track the synced pack version in target repositories.
+- Added repo-seed sync workflow guidance.
+- Added managed-file hash tracking through `.agent-guidelines-manifest.json`.
+- Added conservative conflict behavior that writes incoming versions under `.agent-guidelines-conflicts/`.
+- Added separated Python and shell script convention files.
+
+### Changed
+- Replaced mixed branch type policy with strict Git Flow branch families: `feature/*`, `release/*`, and `hotfix/*`.
+- Set `develop` as the default integration branch, normal PR target, and recommended hosted default branch for Git Flow repositories.
+- Clarified that normal documentation, tests, refactors, chores, and non-emergency bug fixes use `feature/*` branches under strict Git Flow.
+- Renamed the central guideline source example from `project-seed` to `repo-seed`.
+
+## 1.19.0 - 2026-06-19
+
+### Added
+- Added unified branch type table and branch naming policy.
+- Added explicit PR creation/proposal policy so agents do not randomly skip pull requests.
+- Added fallback PR reporting requirements when PR creation is unavailable.
+
+### Changed
+- Clarified when to use `feature`, `bugfix`, `docs`, `test`, `refactor`, `chore`, `release`, and `hotfix` branches.
+- Updated PR checklist to verify branch type, branch naming, and PR target.
+
 ## 1.18.0 - 2026-06-18
 
 ### Changed
