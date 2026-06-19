@@ -2,14 +2,14 @@
 
 Repository-level instructions for AI coding agents.
 
-**Version**: 1.22  
+**Version**: 1.24  
 **Status**: Active  
 **Last Updated**: 2026-06-19
 
 **Recent changes**:
-- Renamed the repo-seed sync script to the stable path `scripts/sync-agent-guidelines.py` so Git history tracks changes cleanly.
-- Clarified that repo-maintained scripts use stable filenames; versioned suffixes are for distributed copies, generated outputs, and archive artifacts.
-- Kept sync branches versioned with the pack version, for example `feature/sync-agent-guidelines-1-22-0`.
+- Added comment discipline for code, scripts, and generated documentation.
+- Added summary discipline so PR/task summaries stay concise and specific.
+- Clarified that obvious code should not be commented and summaries should not be padded.
 
 ---
 
@@ -17,6 +17,8 @@ Repository-level instructions for AI coding agents.
 
 | Version | Date | Changes |
 |---------|------|---------|
+| 1.24 | 2026-06-19 | Added comment and summary discipline for code, scripts, PRs, and agent completion notes. |
+| 1.23 | 2026-06-19 | Added Git/PR preflight checks, duplicate-work protection, and generic-example guidance. |
 | 1.22 | 2026-06-19 | Renamed the repo-seed sync script to a stable filename and clarified script filename/versioning guidance. |
 | 1.21 | 2026-06-19 | Enforced strict Git Flow branch families and added repo-seed sync workflow/script guidance. |
 | 1.19 | 2026-06-19 | Unified branch prefix selection, PR creation/proposal behavior, and fallback PR reporting. |
@@ -116,6 +118,7 @@ games/example-game/AGENTS.md
 - When in doubt, preserve the existing local style of the file being edited.
 - Preserve existing indentation style in touched files: use spaces if the file/repo uses spaces, and tabs if it uses tabs.
 - Preserve existing user-facing text style in touched files, including ASCII vs Unicode punctuation, decorative separators, quote style, symbols, labels, and terminal/UI output formatting.
+- Do not add obvious comments, noisy summaries, or broad explanatory text that does not help maintainers understand intent, risk, tradeoffs, or non-obvious behavior.
 
 ---
 
@@ -124,6 +127,7 @@ games/example-game/AGENTS.md
 - Understand the task and inspect the relevant files before editing.
 - Check for applicable upstream, repository-level, parent, or child `AGENTS.md` files before modifying specific code paths.
 - Check for applicable convention files under `docs/` before editing code, scripts, docs, games, or tooling.
+- Run Git/PR preflight before creating a branch, starting duplicate work, or opening a PR when the repository has Git remotes or hosted PR tooling available.
 - If an FSD, TSD, GDD, product brief, issue, ticket, or acceptance criteria are provided, read them before implementation and use them as requirements input.
 - Prefer small, targeted changes over broad rewrites.
 - Do not reformat unrelated files.
@@ -134,6 +138,8 @@ games/example-game/AGENTS.md
 - Preserve existing architecture, project boundaries, and naming patterns.
 - Add or update unit tests when feasible, especially for behavior changes, bug fixes, validation logic, and edge cases.
 - If tests are not added, explain why they were not practical or useful for the change.
+- Keep comments purposeful. Explain why something exists, non-obvious behavior, tradeoffs, edge cases, or external constraints; do not comment obvious code.
+- Keep task summaries, PR summaries, and generated documentation concise. Do not pad with broad explanations, repeated points, or generic praise.
 - Always try to build the project when a build command exists and the change affects buildable code.
 - Always try to run relevant tests when test commands or test projects exist.
 - Run smoke tests or quick manual checks when the project exposes a runnable app, CLI, script, game scene, or service entry point and doing so is practical in the environment.
@@ -257,13 +263,13 @@ python /path/to/repo-seed/scripts/sync-agent-guidelines.py --source /path/to/rep
 Recommended branch for syncing this pack into another repository:
 
 ```text
-feature/sync-agent-guidelines-1-22-0
+feature/sync-agent-guidelines-1-24-0
 ```
 
 Recommended PR title:
 
 ```text
-Sync agent guidelines 1.22.0
+Sync agent guidelines 1.24.0
 ```
 
 
@@ -410,6 +416,45 @@ When a task comes from an issue, ticket, FSD, TSD, GDD, or feature entry, refere
 
 ---
 
+## Comments and Summaries
+
+Use comments and summaries to clarify important information, not to narrate obvious code or fill space.
+
+Comment rules:
+
+- Comments should explain intent, constraints, tradeoffs, non-obvious behavior, edge cases, external requirements, or safety concerns.
+- Do not comment obvious assignments, simple conditionals, straightforward loops, or self-explanatory method calls.
+- Do not add large header comments, banner comments, or wide comment blocks unless the surrounding file already uses that style.
+- Prefer clearer names and simpler code over comments that explain confusing code.
+- Preserve useful existing comments, but remove or update stale comments when editing related code.
+- Public API/XML/doc comments are acceptable when the project already uses them or when they clarify behavior for consumers. Do not add XML comments to every member by default.
+
+Summary rules:
+
+- Task/PR summaries should be short, specific, and factual.
+- Summarize what changed, why it changed when relevant, validation performed, and remaining risks.
+- Do not include generic praise, broad filler, repeated bullets, or long explanations that belong in design docs.
+- Do not mention AI assistant/tool/model names in summaries unless the task is explicitly about AI tooling or agent-guideline files.
+
+Good comment:
+
+```csharp
+// Keep this timeout below the gateway limit so retries happen client-side.
+private static readonly TimeSpan RequestTimeout = TimeSpan.FromSeconds(25);
+```
+
+Bad comments:
+
+```csharp
+// Set allowed to false.
+var allowed = false;
+
+// If the order is null, throw an exception.
+if (order == null)
+	throw new ArgumentNullException(nameof(order));
+```
+
+---
 
 ## Artifact and Bundle Naming
 
@@ -455,6 +500,8 @@ Rules:
 - Preserve existing local style when it conflicts with a generic convention and the task is not style cleanup.
 - Preserve existing indentation style: use spaces in files/repos that already use spaces, and tabs in files/repos that already use tabs. For new files, follow the nearest `.editorconfig` or convention file.
 - Preserve existing user-facing string style: ASCII vs Unicode punctuation, decorative separators, labels, prompts, CLI output, terminal headers, and UI text should stay consistent with nearby code.
+- Shared templates and guideline examples should use generic domain names and generic enums, such as `OrderStatusEnum`, unless the example is intentionally project-specific.
+- Follow comment and summary discipline: no obvious code comments, no wide/banner comments unless local style uses them, and concise summaries only.
 - Do not rewrite unrelated code just to satisfy conventions.
 - Add new language/framework convention files only when the repository actually needs them.
 
@@ -467,6 +514,36 @@ Future convention files can be added for TypeScript, Python applications, Go, Ru
 Use strict Git Flow when this pack is the repository workflow source of truth. Normal work must flow through `develop`; `main` is reserved for released/production-ready code.
 
 For small solo/local repositories, keep the same branch families and target rules when possible. If the environment cannot create branches or PRs, report the intended branch name, source branch, target branch, PR title, PR description, and validation summary.
+
+### Git and PR Preflight
+
+Before creating a new branch, starting duplicate work, or opening a pull request, agents MUST check the current repository and remote state when tools are available.
+
+Run, when practical:
+
+```bash
+git fetch --all --prune
+git status --short
+git branch --show-current
+git log --oneline --decorate --graph --all -20
+git branch -r --merged origin/develop
+```
+
+If GitHub CLI is available, also check:
+
+```bash
+gh pr status
+gh pr list --state open --limit 20
+gh pr list --state merged --limit 20
+```
+
+Rules:
+
+- Do not create duplicate branches or PRs for work already merged into `develop`.
+- If an equivalent branch or open PR already exists, update/report that branch/PR instead of creating another one.
+- If the requested change appears already merged, report that finding and ask before creating a new branch.
+- If remote/PR checks cannot be run, state the limitation and continue using the available local Git evidence.
+- Do not assume stale local branch state reflects hosted PR state; fetch/prune first when possible.
 
 ### Long-Lived Branches
 
@@ -518,8 +595,8 @@ feature/add-order-export
 feature/update-agent-guidelines
 feature/add-order-export-tests
 feature/refactor-order-validation
-feature/sync-agent-guidelines-1-22-0
-release/1.22.0
+feature/sync-agent-guidelines-1-24-0
+release/1.24.0
 hotfix/fix-login-crash
 ```
 
@@ -547,7 +624,7 @@ Good PR titles:
 ```text
 Add order export validation
 Fix payment status mapping
-Sync agent guidelines 1.22.0
+Sync agent guidelines 1.24.0
 ```
 
 Avoid PR titles like:
@@ -710,7 +787,10 @@ Before finishing a task, confirm:
 - Applicable convention docs under `docs/` were checked for changed code/scripts/docs.
 - Existing indentation style was preserved in modified files.
 - Existing user-facing text/output style was preserved, including ASCII vs Unicode punctuation and decorative separators.
+- Comments and summaries are purposeful, concise, and do not explain obvious code.
 - C# control-flow style was preserved or applied: no inline `if (...) return ...;`, braces required for multi-statement blocks, and blank line after a completed control block before the next independent statement.
+- Git/PR preflight was run when available, or unavailable checks were reported.
+- Existing branches/PRs/merged work were checked to avoid duplicate work.
 - A new task branch was created, or branch creation was impossible and the reason is reported.
 - Changes are focused on the requested task.
 - Provided FSD/TSD/GDD/acceptance criteria were followed, or conflicts/gaps were reported.
@@ -739,6 +819,8 @@ Use `.github/pull_request_template.md` when it exists. Otherwise, use this struc
 ## Summary
 - 
 
+Keep the summary concise and factual. Do not add generic filler or mention AI assistant/tool/model names.
+
 ## Changes
 - 
 
@@ -756,9 +838,11 @@ Use `.github/pull_request_template.md` when it exists. Otherwise, use this struc
 - [ ] Tests
 - [ ] Smoke/manual check where practical
 - [ ] Implementation rechecked against requirements
+- [ ] Comments/summaries are concise and do not explain obvious code
 - [ ] Format/lint
 
 ## Branching / Merge Safety
+- [ ] Git/PR preflight checked remote state, open PRs, and recently merged PRs where available
 - [ ] Branch name follows `feature/<short-kebab-description>`, `release/<version>`, or `hotfix/<short-kebab-description>`
 - [ ] Branch family follows strict Git Flow
 - [ ] PR targets the correct Git Flow branch

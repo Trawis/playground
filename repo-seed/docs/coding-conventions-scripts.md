@@ -2,7 +2,7 @@
 
 Shared conventions for standalone automation scripts.
 
-**Version**: 1.22  
+**Version**: 1.24  
 **Status**: Active  
 **Last Updated**: 2026-06-19
 
@@ -79,7 +79,7 @@ Examples:
 sync-agent-guidelines.py
 backup-photos.py
 cleanup-downloads.sh
-agent-guidelines-pack_1.22.0.zip
+agent-guidelines-pack_1.24.0.zip
 backup-photos_1.1.0.csv
 backup-photos_1.1.0_report.txt
 cleanup-downloads_2.0.0_log.txt

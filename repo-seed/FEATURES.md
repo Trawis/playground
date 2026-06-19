@@ -4,6 +4,10 @@ Track feature state here. Keep detailed requirements in FSD/TSD/GDD documents wh
 
 ## Implemented
 
+- Comment and summary discipline for code, scripts, PRs, and agent completion notes.
+- Git/PR preflight guidance before creating branches or PRs.
+- Duplicate-work protection for already-merged or already-open PR work.
+- Generic reusable examples that avoid project-specific enum/domain names.
 - `.agent-guidelines-version` marker for synced pack version tracking.
 - Stable repository script filename policy, with versioned names reserved for distributed artifacts and generated outputs.
 - `repo-seed` sync script with stable filename for updating multiple repositories.

@@ -5,6 +5,8 @@
 ## Summary
 - 
 
+Keep the summary concise and factual. Do not add generic filler or mention AI assistant/tool/model names.
+
 ## Changes
 - 
 
@@ -29,8 +31,10 @@
 - [ ] Smoke/manual check ran where practical
 - [ ] Format/lint checks ran where configured
 - [ ] Implementation rechecked against task/specs/changed files
+- [ ] Comments/summaries are concise and do not explain obvious code
 
 ## Branching / Merge Safety
+- [ ] Git/PR preflight checked remote state, open PRs, and recently merged PRs where available
 - [ ] Work was done on a task branch
 - [ ] Branch name follows `feature/<short-kebab-description>`, `release/<version>`, or `hotfix/<short-kebab-description>`
 - [ ] Branch family follows strict Git Flow

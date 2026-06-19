@@ -24,6 +24,28 @@ Use newest entries first. Do not dump raw git commits here.
 ### Security
 - 
 
+## 1.24.0 - 2026-06-19
+
+### Added
+- Added comment discipline guidance for code, scripts, public API documentation, and generated documentation.
+- Added summary discipline guidance for task summaries, PR summaries, and agent completion notes.
+- Added examples showing useful comments versus obvious/noisy comments.
+
+### Changed
+- Updated completion and PR checklists to include concise comments/summaries.
+- Bumped sync script metadata to pack version `1.24.0`.
+
+## 1.23.0 - 2026-06-19
+
+### Added
+- Added mandatory Git/PR preflight guidance before agents create branches, start duplicate work, or open pull requests.
+- Added duplicate-work protection for changes already merged into `develop` or already covered by an existing open PR.
+- Added generic-example guidance so shared templates avoid project-specific enum/domain names.
+
+### Changed
+- Updated sync script metadata to pack version `1.23.0` and added remote fetch/prune during branch preparation unless skipped.
+- Updated C# examples to use the generic `OrderStatusEnum` example instead of project-specific terminal enums.
+
 ## 1.22.0 - 2026-06-19
 
 ### Changed
