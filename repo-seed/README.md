@@ -63,11 +63,12 @@ Add examples for common usage.
 - [`docs/fsd-template.md`](docs/fsd-template.md) — Functional Specification Document template
 - [`docs/tsd-template.md`](docs/tsd-template.md) — Technical Specification Document template
 - [`docs/gdd-template.md`](docs/gdd-template.md) — Game Design Document template
+- [`docs/ci-cd-guidelines.md`](docs/ci-cd-guidelines.md) — CI/CD and workflow automation guidance
 - [`scripts/sync-agent-guidelines.py`](scripts/sync-agent-guidelines.py) — sync this pack from `repo-seed` into other repositories
 - [`.agent-guidelines-version`](.agent-guidelines-version) — synced guideline pack version marker
 
 
-Core pack rules include instruction strictness levels, Git/PR preflight checks, strict Git Flow branch families, mandatory PR creation/proposal behavior, no AI/model names in Git artifacts, repo-seed sync workflow with stable script filename, indentation preservation for existing files, user-facing text/output style preservation, generic reusable examples, concise comment/summary discipline, C# guard clauses with statements on the next line, and C# blank-line spacing after completed control blocks.
+Core pack rules include instruction strictness levels, Git/PR preflight checks, strict Git Flow branch families, mandatory PR creation/proposal behavior, CI/CD safety guidance, no AI/model names in Git artifacts, repo-seed sync workflow with stable script filename, indentation preservation for existing files, user-facing text/output style preservation, generic reusable examples, concise comment/summary discipline, C# guard clauses with statements on the next line, and C# blank-line spacing after completed control blocks.
 
 ## Syncing Into Other Repositories
 
@@ -81,7 +82,7 @@ python /path/to/repo-seed/scripts/sync-agent-guidelines.py --source /path/to/rep
 Routine syncs should use a strict Git Flow branch such as:
 
 ```text
-feature/sync-agent-guidelines-1-24-0
+feature/sync-agent-guidelines-1-25-0
 ```
 
 Then open a PR into `develop`. Do not auto-merge.

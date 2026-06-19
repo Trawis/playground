@@ -4,6 +4,7 @@ Track feature state here. Keep detailed requirements in FSD/TSD/GDD documents wh
 
 ## Implemented
 
+- CI/CD and workflow automation guidance.
 - Comment and summary discipline for code, scripts, PRs, and agent completion notes.
 - Git/PR preflight guidance before creating branches or PRs.
 - Duplicate-work protection for already-merged or already-open PR work.
@@ -25,7 +26,8 @@ Track feature state here. Keep detailed requirements in FSD/TSD/GDD documents wh
 
 ## Planned
 
-- 
+- Optional provider-specific CI/CD examples after real project needs are known.
+
 
 ## Maybe Later
 

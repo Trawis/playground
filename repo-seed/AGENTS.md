@@ -2,14 +2,14 @@
 
 Repository-level instructions for AI coding agents.
 
-**Version**: 1.24  
+**Version**: 1.25  
 **Status**: Active  
 **Last Updated**: 2026-06-19
 
 **Recent changes**:
-- Added comment discipline for code, scripts, and generated documentation.
-- Added summary discipline so PR/task summaries stay concise and specific.
-- Clarified that obvious code should not be commented and summaries should not be padded.
+- Added CI/CD and workflow automation guidance.
+- Added CI/CD safety rules for workflow, deployment, and secret changes.
+- Added a lightweight `docs/ci-cd-guidelines.md` reference document.
 
 ---
 
@@ -17,6 +17,7 @@ Repository-level instructions for AI coding agents.
 
 | Version | Date | Changes |
 |---------|------|---------|
+| 1.25 | 2026-06-19 | Added CI/CD and workflow automation guidance, safety boundaries, and `docs/ci-cd-guidelines.md`. |
 | 1.24 | 2026-06-19 | Added comment and summary discipline for code, scripts, PRs, and agent completion notes. |
 | 1.23 | 2026-06-19 | Added Git/PR preflight checks, duplicate-work protection, and generic-example guidance. |
 | 1.22 | 2026-06-19 | Renamed the repo-seed sync script to a stable filename and clarified script filename/versioning guidance. |
@@ -159,6 +160,7 @@ Ask before:
 - renaming public APIs
 - changing persistence models or database schema
 - changing CI/CD, deployment, or infrastructure behavior
+- adding or changing workflow jobs, deployment steps, repository secrets, or release automation
 - applying a new pattern across the codebase
 
 ---
@@ -416,6 +418,31 @@ When a task comes from an issue, ticket, FSD, TSD, GDD, or feature entry, refere
 
 ---
 
+## CI/CD and Workflow Automation
+
+CI/CD changes are safety-sensitive because they can affect builds, releases, deployments, secrets, and production behavior.
+
+Rules:
+
+- Do not create, modify, remove, or rename CI/CD workflows unless the task explicitly asks for CI/CD work.
+- Preserve the existing CI/CD provider and structure. Do not switch between GitHub Actions, GitLab CI, Azure DevOps, Jenkins, or other systems unless explicitly requested.
+- Do not add deployment, publishing, release, package-upload, infrastructure, or secret-dependent jobs unless explicitly requested.
+- Do not add, print, expose, rename, or guess secrets, tokens, certificates, credentials, or secret names unless the repository already documents the exact name and the task requires referencing it.
+- Do not weaken existing checks, branch protection assumptions, test gates, code scanning, dependency scanning, or approval gates unless explicitly requested.
+- Prefer minimal workflow changes that validate the touched project or script.
+- If editing CI/CD, document the intended trigger, job purpose, required permissions, and validation method.
+- If a workflow cannot be validated locally, state what was checked and what still needs to be verified by the hosted CI system.
+- For CI/CD guidance, use `docs/ci-cd-guidelines.md` when present.
+
+Recommended CI/CD order for new projects:
+
+1. Build and test only.
+2. Add lint/format checks when stable.
+3. Add packaging/release automation after the project has versioning and changelog discipline.
+4. Add deployment only when the deployment target, rollback process, and required secrets are documented.
+
+---
+
 ## Comments and Summaries
 
 Use comments and summaries to clarify important information, not to narrate obvious code or fill space.
@@ -492,6 +519,7 @@ Use repository-specific convention files first. If no more specific convention e
 
 - C#/.NET: `docs/coding-conventions-csharp.md`
 - Shell/Python scripts: `docs/coding-conventions-scripts.md`
+- CI/CD and workflow automation: `docs/ci-cd-guidelines.md`
 
 Rules:
 
@@ -703,6 +731,7 @@ Do not modify without explicit instruction:
 - secrets, credentials, tokens, certificates, or `.env*` files
 - production deployment files
 - CI/CD pipelines
+- workflow permissions and deployment triggers
 - infrastructure-as-code files
 - database migrations
 - generated code
@@ -800,6 +829,7 @@ Before finishing a task, confirm:
 - Smoke tests or quick manual checks were run when practical, or skipped with a clear reason.
 - The implementation was rechecked against requirements and changed files.
 - Format/lint checks were run when configured, or skipped with a clear reason.
+- CI/CD changes were explicitly requested, minimal, and documented, or CI/CD was left untouched.
 - `README.md`, `CHANGELOG.md`, `FEATURES.md`, or `docs/` were updated when the change affected public behavior, setup, commands, features, versioned output, specifications, or documented limitations.
 - `.editorconfig` impact was considered when changing formatting/style conventions.
 - The repository PR template was used when creating or proposing a pull request.
