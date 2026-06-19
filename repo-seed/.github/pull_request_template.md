@@ -30,6 +30,7 @@ Keep the summary concise and factual. Do not add generic filler or mention AI as
 - [ ] Tests ran or skip reason documented
 - [ ] Smoke/manual check ran where practical
 - [ ] Format/lint checks ran where configured
+- [ ] CI/CD changes were explicitly requested and validated, or CI/CD was left untouched
 - [ ] Implementation rechecked against task/specs/changed files
 - [ ] Comments/summaries are concise and do not explain obvious code
 
@@ -41,6 +42,10 @@ Keep the summary concise and factual. Do not add generic filler or mention AI as
 - [ ] PR targets the correct Git Flow branch
 - [ ] No auto-merge requested/performed
 - [ ] No branch protection bypass requested/performed
+
+## CI/CD / Deployment Impact
+- [ ] No CI/CD, deployment, workflow permission, release, package publishing, or secret behavior changed
+- [ ] If changed, intended trigger/job/permissions/validation are documented
 
 ## Notes / Risks
 - 

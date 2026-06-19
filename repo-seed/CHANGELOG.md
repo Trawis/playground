@@ -24,6 +24,17 @@ Use newest entries first. Do not dump raw git commits here.
 ### Security
 - 
 
+## 1.25.0 - 2026-06-19
+
+### Added
+- Added CI/CD and workflow automation guidance.
+- Added `docs/ci-cd-guidelines.md` for safe CI/CD changes, validation, and staged adoption.
+- Added CI/CD completion checklist guidance.
+
+### Changed
+- Clarified that CI/CD workflow, deployment, secret, permission, and release automation changes require explicit task scope.
+- Updated README links and sync metadata for pack version `1.25.0`.
+
 ## 1.24.0 - 2026-06-19
 
 ### Added

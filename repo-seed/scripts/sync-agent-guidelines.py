@@ -23,8 +23,8 @@ from dataclasses import dataclass
 from pathlib import Path
 
 SCRIPT_NAME = "sync-agent-guidelines"
-SCRIPT_VERSION = "1.4.0"
-PACK_VERSION = "1.24.0"
+SCRIPT_VERSION = "1.5.0"
+PACK_VERSION = "1.25.0"
 MANIFEST_FILE = ".agent-guidelines-manifest.json"
 CONFLICT_DIR = ".agent-guidelines-conflicts"
 
@@ -41,6 +41,7 @@ CORE_FILES = [
     "docs/fsd-template.md",
     "docs/tsd-template.md",
     "docs/gdd-template.md",
+    "docs/ci-cd-guidelines.md",
     "scripts/sync-agent-guidelines.py",
 ]
 
