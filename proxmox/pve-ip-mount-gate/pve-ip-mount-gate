@@ -1,0 +1,562 @@
+#!/usr/bin/env bash
+set -uo pipefail
+
+APP="pve-ip-mount-gate"
+STATE_DIR="/etc/${APP}"
+RUNTIME_DIR="/run/${APP}"
+MOUNT_DB="${STATE_DIR}/mounts.db"
+PENDING_FILE="${RUNTIME_DIR}/pending"
+LOCK_FILE="${RUNTIME_DIR}/lock"
+CONFIG_FILE="/etc/default/${APP}"
+
+GATE_TAG="ipmount-gated"
+IO_TIMEOUT="8"
+IP_RE='([0-9]{1,3}\.){3}[0-9]{1,3}'
+
+[[ -r "$CONFIG_FILE" ]] && source "$CONFIG_FILE"
+
+log() {
+    echo "$(date '+%F %T') [${APP}] $*"
+}
+
+die() {
+    log "ERROR: $*" >&2
+    exit 1
+}
+
+require_root() {
+    [[ ${EUID:-$(id -u)} -eq 0 ]] || die "must run as root"
+}
+
+ensure_runtime() {
+    mkdir -p "$STATE_DIR" "$RUNTIME_DIR"
+    touch "$MOUNT_DB"
+}
+
+acquire_lock() {
+    ensure_runtime
+    exec 9>"$LOCK_FILE"
+    flock -w 30 9 || die "could not acquire lock: $LOCK_FILE"
+}
+
+extract_ip() {
+    grep -Eo "$IP_RE" <<<"$1" | head -n1
+}
+
+emit_remote_mount() {
+    local target="$1"
+    local source="$2"
+    local origin="$3"
+    local ip
+
+    [[ -n "$target" && -n "$source" ]] || return 0
+
+    ip="$(extract_ip "$source" || true)"
+    [[ -n "$ip" ]] || return 0
+
+    # A plain absolute local path is not remote. CIFS //IP/share is remote.
+    if [[ "$source" == /* && "$source" != //* ]]; then
+        return 0
+    fi
+
+    target="${target%/}"
+    [[ -n "$target" ]] || target="/"
+
+    printf '%s|%s|%s\n' "$target" "$ip" "$origin"
+}
+
+discover_current_mounts() {
+    {
+        # /etc/fstab: discover even when currently unmounted.
+        while read -r target source fstype; do
+            [[ -n "${target:-}" ]] || continue
+            emit_remote_mount "$target" "$source" "fstab:${fstype:-unknown}"
+        done < <(findmnt --fstab -rn -o TARGET,SOURCE,FSTYPE 2>/dev/null || true)
+
+        # Proxmox NFS/CIFS storage definitions: discover even when unavailable.
+        if [[ -r /etc/pve/storage.cfg ]]; then
+            awk '
+                function flush() {
+                    if ((type == "nfs" || type == "cifs") && server != "") {
+                        p = path
+                        if (p == "") p = "/mnt/pve/" id
+                        print p "|" server "|pve:" type ":" id
+                    }
+                }
+                /^[^[:space:]][^:]*:[[:space:]]+/ {
+                    flush()
+                    line=$0
+                    type=line; sub(/:.*/, "", type)
+                    id=line; sub(/^[^:]+:[[:space:]]*/, "", id)
+                    server=""; path=""
+                    next
+                }
+                /^[[:space:]]+server[[:space:]]+/ {
+                    server=$0; sub(/^[[:space:]]+server[[:space:]]+/, "", server); next
+                }
+                /^[[:space:]]+path[[:space:]]+/ {
+                    path=$0; sub(/^[[:space:]]+path[[:space:]]+/, "", path); next
+                }
+                END { flush() }
+            ' /etc/pve/storage.cfg |
+            while IFS='|' read -r target server origin; do
+                emit_remote_mount "$target" "$server" "$origin"
+            done
+        fi
+
+        # Custom mounts not represented above: remember them while mounted.
+        while read -r target source fstype; do
+            [[ -n "${target:-}" ]] || continue
+            emit_remote_mount "$target" "$source" "mounted:${fstype:-unknown}"
+        done < <(findmnt -rn -o TARGET,SOURCE,FSTYPE 2>/dev/null || true)
+    } | awk -F'|' 'NF >= 2 && !seen[$1]++'
+}
+
+refresh_mount_db() {
+    local tmp
+    ensure_runtime
+    tmp="$(mktemp)"
+
+    # Keep previously seen custom mounts so a currently-unavailable custom
+    # mount remains a dependency. Configured fstab/PVE mounts are refreshed.
+    {
+        # Current configuration/live state wins if a custom mount changes source.
+        discover_current_mounts
+        awk -F'|' '$3 ~ /^mounted:/ {print}' "$MOUNT_DB" 2>/dev/null || true
+    } | awk -F'|' 'NF >= 2 && !seen[$1]++' > "$tmp"
+
+    mv "$tmp" "$MOUNT_DB"
+}
+
+effective_mounts() {
+    refresh_mount_db
+    cat "$MOUNT_DB"
+}
+
+local_ct_ids() {
+    pct list 2>/dev/null | awk 'NR > 1 {print $1}'
+}
+
+ct_config() {
+    pct config "$1" 2>/dev/null
+}
+
+cfg_value() {
+    local key="$1"
+    awk -F': ' -v k="$key" '$1 == k {print $2; exit}'
+}
+
+has_tag_string() {
+    local tags="$1"
+    local wanted="$2"
+    local t
+    IFS=';' read -r -a _tags <<<"$tags"
+    for t in "${_tags[@]:-}"; do
+        [[ "$t" == "$wanted" ]] && return 0
+    done
+    return 1
+}
+
+ct_has_gate_tag() {
+    local cfg="$1"
+    local tags
+    tags="$(printf '%s\n' "$cfg" | cfg_value tags)"
+    has_tag_string "$tags" "$GATE_TAG"
+}
+
+add_gate_tag() {
+    local ctid="$1"
+    local cfg="$2"
+    local tags new_tags
+    tags="$(printf '%s\n' "$cfg" | cfg_value tags)"
+
+    has_tag_string "$tags" "$GATE_TAG" && return 0
+
+    if [[ -n "$tags" ]]; then
+        new_tags="${tags};${GATE_TAG}"
+    else
+        new_tags="$GATE_TAG"
+    fi
+
+    pct set "$ctid" --tags "$new_tags" >/dev/null
+}
+
+remove_gate_tag() {
+    local ctid="$1"
+    local cfg tags t
+    local -a kept=()
+
+    cfg="$(ct_config "$ctid" || true)"
+    [[ -n "$cfg" ]] || return 0
+    tags="$(printf '%s\n' "$cfg" | cfg_value tags)"
+
+    IFS=';' read -r -a _tags <<<"$tags"
+    for t in "${_tags[@]:-}"; do
+        [[ -n "$t" && "$t" != "$GATE_TAG" ]] && kept+=("$t")
+    done
+
+    if ((${#kept[@]} == 0)); then
+        pct set "$ctid" --delete tags >/dev/null 2>&1 || true
+    else
+        local joined
+        joined="$(IFS=';'; echo "${kept[*]}")"
+        pct set "$ctid" --tags "$joined" >/dev/null
+    fi
+}
+
+path_matches_target() {
+    local path="$1"
+    local target="$2"
+    [[ "$path" == "$target" || ( "$target" != "/" && "$path" == "$target/"* ) ]]
+}
+
+ct_external_deps() {
+    local ctid="$1"
+    local src rec target ip origin best best_len
+    local -a mounts=()
+
+    mapfile -t mounts < <(cat "$MOUNT_DB" 2>/dev/null || true)
+
+    while IFS= read -r src; do
+        [[ "$src" == /* ]] || continue
+
+        best=""
+        best_len=0
+
+        for rec in "${mounts[@]}"; do
+            IFS='|' read -r target ip origin <<<"$rec"
+            [[ -n "$target" ]] || continue
+
+            if path_matches_target "$src" "$target" && (( ${#target} > best_len )); then
+                best="$target"
+                best_len=${#target}
+            fi
+        done
+
+        [[ -n "$best" ]] && printf '%s\n' "$best"
+    done < <(
+        ct_config "$ctid" |
+        sed -n 's/^mp[0-9][0-9]*:[[:space:]]*\([^,]*\).*/\1/p'
+    ) | sort -u
+}
+
+enroll_new_cts() {
+    local ctid cfg onboot hostname deps
+
+    refresh_mount_db
+
+    while read -r ctid; do
+        [[ -n "$ctid" ]] || continue
+
+        cfg="$(ct_config "$ctid" || true)"
+        [[ -n "$cfg" ]] || continue
+
+        deps="$(ct_external_deps "$ctid" || true)"
+        [[ -n "$deps" ]] || continue
+
+        # Tagged CTs stay managed across migrations/clones.
+        if ct_has_gate_tag "$cfg"; then
+            continue
+        fi
+
+        onboot="$(printf '%s\n' "$cfg" | cfg_value onboot)"
+        [[ "$onboot" == "1" ]] || continue
+
+        hostname="$(printf '%s\n' "$cfg" | cfg_value hostname)"
+        add_gate_tag "$ctid" "$cfg"
+        pct set "$ctid" --onboot 0 >/dev/null
+        log "enrolled CT $ctid (${hostname:-unknown}); onboot 1 -> 0; tag=$GATE_TAG"
+    done < <(local_ct_ids)
+}
+
+managed_local_cts() {
+    local ctid cfg
+    while read -r ctid; do
+        [[ -n "$ctid" ]] || continue
+        cfg="$(ct_config "$ctid" || true)"
+        [[ -n "$cfg" ]] || continue
+        ct_has_gate_tag "$cfg" && printf '%s\n' "$ctid"
+    done < <(local_ct_ids)
+}
+
+boot_init() {
+    require_root
+    acquire_lock
+
+    refresh_mount_db
+    enroll_new_cts
+
+    : > "$PENDING_FILE"
+    while read -r ctid; do
+        [[ -n "$ctid" ]] || continue
+        # Only gate tagged CTs that still depend on an IP-backed bind mount.
+        [[ -n "$(ct_external_deps "$ctid" || true)" ]] || continue
+        printf '%s\n' "$ctid" >> "$PENDING_FILE"
+    done < <(managed_local_cts)
+
+    sort -nu -o "$PENDING_FILE" "$PENDING_FILE"
+    log "boot pending set initialized: $(wc -l < "$PENDING_FILE") CT(s)"
+}
+
+mount_ready_map() {
+    local rec target ip origin actual
+
+    while IFS='|' read -r target ip origin; do
+        [[ -n "$target" ]] || continue
+        actual="$(findmnt -rn -M "$target" -o SOURCE 2>/dev/null || true)"
+
+        if [[ -z "$actual" ]]; then
+            printf '%s|0|not-mounted\n' "$target"
+            continue
+        fi
+
+        if [[ "$actual" != *"$ip"* ]]; then
+            printf '%s|0|unexpected-source:%s\n' "$target" "$actual"
+            continue
+        fi
+
+        if ! timeout -k 2s "${IO_TIMEOUT}s" stat -- "$target" >/dev/null 2>&1; then
+            printf '%s|0|not-responding\n' "$target"
+            continue
+        fi
+
+        printf '%s|1|%s\n' "$target" "$actual"
+    done < "$MOUNT_DB"
+}
+
+remove_pending_ct() {
+    local ctid="$1"
+    local tmp
+    tmp="$(mktemp)"
+    grep -vxF "$ctid" "$PENDING_FILE" 2>/dev/null > "$tmp" || true
+    mv "$tmp" "$PENDING_FILE"
+}
+
+cycle() {
+    require_root
+    acquire_lock
+
+    refresh_mount_db
+    # New CTs/shares are discovered continuously. Newly enrolled CTs are
+    # intentionally NOT added to this boot's pending list; they start next boot.
+    enroll_new_cts
+
+    [[ -e "$PENDING_FILE" ]] || {
+        log "no boot pending state yet; initializing now"
+        : > "$PENDING_FILE"
+        while read -r ctid; do
+            [[ -n "$(ct_external_deps "$ctid" || true)" ]] && echo "$ctid" >> "$PENDING_FILE"
+        done < <(managed_local_cts)
+        sort -nu -o "$PENDING_FILE" "$PENDING_FILE"
+    }
+
+    declare -A READY REASON
+    local target ready reason ctid status dep all_ready
+    local -a deps=()
+
+    while IFS='|' read -r target ready reason; do
+        READY["$target"]="$ready"
+        REASON["$target"]="$reason"
+        if [[ "$ready" == "1" ]]; then
+            log "mount OK: $target -> $reason"
+        else
+            log "mount WAIT: $target ($reason)"
+        fi
+    done < <(mount_ready_map)
+
+    # Work from a snapshot because successful starts mutate PENDING_FILE.
+    mapfile -t _pending < "$PENDING_FILE"
+
+    for ctid in "${_pending[@]:-}"; do
+        [[ -n "$ctid" ]] || continue
+
+        if ! ct_config "$ctid" >/dev/null 2>&1; then
+            log "CT $ctid no longer local/existing; removing from this boot pending set"
+            remove_pending_ct "$ctid"
+            continue
+        fi
+
+        status="$(pct status "$ctid" 2>/dev/null | awk '{print $2}')"
+        if [[ "$status" == "running" ]]; then
+            log "CT $ctid already running; marking boot startup complete"
+            remove_pending_ct "$ctid"
+            continue
+        fi
+
+        mapfile -t deps < <(ct_external_deps "$ctid")
+        if ((${#deps[@]} == 0)); then
+            log "CT $ctid no longer has IP-backed bind dependencies; leaving stopped and removing from pending"
+            remove_pending_ct "$ctid"
+            continue
+        fi
+
+        all_ready=1
+        for dep in "${deps[@]}"; do
+            if [[ "${READY[$dep]:-0}" != "1" ]]; then
+                log "CT $ctid waiting for $dep (${REASON[$dep]:-unknown})"
+                all_ready=0
+            fi
+        done
+
+        (( all_ready == 1 )) || continue
+
+        log "starting CT $ctid"
+        if pct start "$ctid"; then
+            log "CT $ctid started"
+            remove_pending_ct "$ctid"
+        else
+            log "CT $ctid start failed; keeping it pending"
+        fi
+    done
+}
+
+start_now() {
+    require_root
+    local ctid="$1"
+    [[ "$ctid" =~ ^[0-9]+$ ]] || die "invalid CTID: $ctid"
+
+    acquire_lock
+    refresh_mount_db
+
+    local cfg deps onboot
+    cfg="$(ct_config "$ctid" || true)"
+    [[ -n "$cfg" ]] || die "CT $ctid not found on this node"
+    deps="$(ct_external_deps "$ctid" || true)"
+    [[ -n "$deps" ]] || die "CT $ctid has no IP-backed bind mount dependency"
+
+    if ! ct_has_gate_tag "$cfg"; then
+        onboot="$(printf '%s\n' "$cfg" | cfg_value onboot)"
+        add_gate_tag "$ctid" "$cfg"
+        [[ "$onboot" == "1" ]] && pct set "$ctid" --onboot 0 >/dev/null
+        log "enrolled CT $ctid"
+    fi
+
+    touch "$PENDING_FILE"
+    grep -qxF "$ctid" "$PENDING_FILE" || echo "$ctid" >> "$PENDING_FILE"
+    sort -nu -o "$PENDING_FILE" "$PENDING_FILE"
+
+    # Release shell lock fd before invoking a fresh cycle which reacquires it.
+    exec 9>&-
+    cycle
+}
+
+unenroll_ct() {
+    require_root
+    local ctid="$1"
+    local restore_onboot="${2:-0}"
+    acquire_lock
+
+    local cfg
+    cfg="$(ct_config "$ctid" || true)"
+    [[ -n "$cfg" ]] || die "CT $ctid not found on this node"
+
+    remove_gate_tag "$ctid"
+    if [[ "$restore_onboot" == "1" ]]; then
+        pct set "$ctid" --onboot 1 >/dev/null
+    fi
+    [[ -e "$PENDING_FILE" ]] && remove_pending_ct "$ctid"
+    log "unenrolled CT $ctid; restore_onboot=$restore_onboot"
+}
+
+forget_mount() {
+    require_root
+    local target="${1%/}"
+    local tmp
+    acquire_lock
+    tmp="$(mktemp)"
+    awk -F'|' -v t="$target" '$1 != t {print}' "$MOUNT_DB" > "$tmp"
+    mv "$tmp" "$MOUNT_DB"
+    log "forgot remembered mount: $target"
+}
+
+status_cmd() {
+    ensure_runtime
+    refresh_mount_db
+
+    echo "Configured tag: $GATE_TAG"
+    echo
+    echo "Known IP-backed mounts:"
+    if [[ -s "$MOUNT_DB" ]]; then
+        column -t -s'|' "$MOUNT_DB" 2>/dev/null || cat "$MOUNT_DB"
+    else
+        echo "  (none)"
+    fi
+
+    echo
+    echo "Managed local LXCs:"
+    local any=0 ctid cfg host
+    while read -r ctid; do
+        any=1
+        cfg="$(ct_config "$ctid" || true)"
+        host="$(printf '%s\n' "$cfg" | cfg_value hostname)"
+        printf '  CT %-6s %s\n' "$ctid" "${host:-unknown}"
+    done < <(managed_local_cts)
+    (( any == 1 )) || echo "  (none)"
+
+    echo
+    echo "Pending this boot:"
+    if [[ -s "$PENDING_FILE" ]]; then
+        sed 's/^/  CT /' "$PENDING_FILE"
+    else
+        echo "  (none)"
+    fi
+}
+
+usage() {
+    cat <<EOF_USAGE
+Usage: $0 COMMAND
+
+Commands:
+  --discover                 Refresh and print known IP-backed mounts
+  --enroll                   Auto-enroll new onboot=1 dependent LXCs
+  --boot-init                Build this boot's pending startup set
+  --cycle                    Discover/enroll and start ready pending LXCs
+  --start-now CTID           Add one managed CT to this boot's pending set
+  --unenroll CTID            Remove gate tag; keep onboot=0
+  --unenroll-onboot CTID     Remove gate tag and restore onboot=1
+  --forget-mount PATH        Remove a remembered custom mount from the DB
+  --status                   Show mounts, managed CTs and boot pending CTs
+EOF_USAGE
+}
+
+case "${1:-}" in
+    --discover)
+        require_root
+        acquire_lock
+        effective_mounts
+        ;;
+    --enroll)
+        require_root
+        acquire_lock
+        enroll_new_cts
+        ;;
+    --boot-init)
+        boot_init
+        ;;
+    --cycle)
+        cycle
+        ;;
+    --start-now)
+        [[ $# -eq 2 ]] || { usage; exit 2; }
+        start_now "$2"
+        ;;
+    --unenroll)
+        [[ $# -eq 2 ]] || { usage; exit 2; }
+        unenroll_ct "$2" 0
+        ;;
+    --unenroll-onboot)
+        [[ $# -eq 2 ]] || { usage; exit 2; }
+        unenroll_ct "$2" 1
+        ;;
+    --forget-mount)
+        [[ $# -eq 2 ]] || { usage; exit 2; }
+        forget_mount "$2"
+        ;;
+    --status)
+        status_cmd
+        ;;
+    *)
+        usage
+        exit 2
+        ;;
+esac
