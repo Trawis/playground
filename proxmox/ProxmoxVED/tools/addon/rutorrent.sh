@@ -33,6 +33,8 @@ PHP_VER=$(php -r 'echo PHP_MAJOR_VERSION.".".PHP_MINOR_VERSION;' 2>/dev/null || 
 PHP_UPLOAD_INI=/etc/php/${PHP_VER}/fpm/conf.d/99-rutorrent-upload.ini
 FILEDROP_CONF=/var/www/rutorrent/plugins/filedrop/conf.php
 RTORRENT_RC=/root/.rtorrent.rc
+TLS_CERT=/etc/nginx/rutorrent-selfsigned.crt
+TLS_KEY=/etc/nginx/rutorrent-selfsigned.key
 
 detect_upload_limit() {
   grep -oP 'client_max_body_size \K[0-9]+' "$NGINX_CONF" 2>/dev/null || echo "32"
@@ -59,9 +61,31 @@ detect_real_ip() {
   grep -q 'set_real_ip_from' "$NGINX_CONF" 2>/dev/null && echo "yes" || echo "no"
 }
 
+detect_tls() {
+  grep -q 'listen 443 ssl' "$NGINX_CONF" 2>/dev/null && echo "yes" || echo "no"
+}
+
+ensure_selfsigned_cert() {
+  [[ -f "$TLS_CERT" && -f "$TLS_KEY" ]] && return 0
+
+  openssl req -x509 -nodes -newkey rsa:2048 \
+    -keyout "$TLS_KEY" -out "$TLS_CERT" -days 3650 \
+    -subj "/CN=rutorrent" &>/dev/null
+  chmod 600 "$TLS_KEY"
+}
+
 write_nginx_conf() {
-  local upload_mb="$1" enable_rpc2="$2" enable_real_ip="$3"
-  local rpc2_block="" real_ip_block=""
+  local upload_mb="$1" enable_rpc2="$2" enable_real_ip="$3" enable_tls="${4:-no}"
+  local rpc2_block="" real_ip_block="" tls_block=""
+
+  if [[ "$enable_tls" == "yes" ]]; then
+    ensure_selfsigned_cert
+    tls_block="
+    listen 443 ssl;
+    ssl_certificate ${TLS_CERT};
+    ssl_certificate_key ${TLS_KEY};
+"
+  fi
 
   if [[ "$enable_rpc2" == "yes" ]]; then
     rpc2_block="
@@ -92,6 +116,7 @@ write_nginx_conf() {
 server {
     listen 80;
     server_name _;
+${tls_block}
 
     root /var/www/rutorrent;
     index index.html index.php;
@@ -172,7 +197,7 @@ action_toggle_rpc2() {
     rpc2_new="yes"
   fi
 
-  write_nginx_conf "$(detect_upload_limit)" "$rpc2_new" "$(detect_real_ip)" || {
+  write_nginx_conf "$(detect_upload_limit)" "$rpc2_new" "$(detect_real_ip)" "$(detect_tls)" || {
     read -rp "Press Enter to continue..."
     return
   }
@@ -197,12 +222,38 @@ action_toggle_real_ip() {
     real_ip_new="yes"
   fi
 
-  write_nginx_conf "$(detect_upload_limit)" "$(detect_rpc2)" "$real_ip_new" || {
+  write_nginx_conf "$(detect_upload_limit)" "$(detect_rpc2)" "$real_ip_new" "$(detect_tls)" || {
     read -rp "Press Enter to continue..."
     return
   }
   systemctl reload nginx
   msg_ok "Real IP forwarding $([ "$real_ip_new" = "yes" ] && echo "enabled" || echo "disabled")"
+  echo ""
+  read -rp "Press Enter to continue..."
+}
+
+action_toggle_tls() {
+  header_info
+  local current tls_new
+
+  current=$(detect_tls)
+
+  if [[ "$current" == "yes" ]]; then
+    whiptail --yesno "HTTPS is currently ENABLED.\n\nDisable it? (HTTP on port 80 stays available either way)" \
+      10 60 --title "Toggle HTTPS" 3>&1 1>&2 2>&3 || return
+    tls_new="no"
+  else
+    whiptail --yesno "HTTPS is currently DISABLED.\n\nEnable it?\n\nUses a self-signed certificate — browsers will show a\nwarning until you accept/trust it. HTTP on port 80\nstays available alongside it." \
+      13 62 --title "Toggle HTTPS" 3>&1 1>&2 2>&3 || return
+    tls_new="yes"
+  fi
+
+  write_nginx_conf "$(detect_upload_limit)" "$(detect_rpc2)" "$(detect_real_ip)" "$tls_new" || {
+    read -rp "Press Enter to continue..."
+    return
+  }
+  systemctl reload nginx
+  msg_ok "HTTPS $([ "$tls_new" = "yes" ] && echo "enabled (self-signed cert)" || echo "disabled")"
   echo ""
   read -rp "Press Enter to continue..."
 }
@@ -224,7 +275,7 @@ action_change_upload_limit() {
     return
   fi
 
-  write_nginx_conf "$new_mb" "$(detect_rpc2)" "$(detect_real_ip)" || {
+  write_nginx_conf "$new_mb" "$(detect_rpc2)" "$(detect_real_ip)" "$(detect_tls)" || {
     read -rp "Press Enter to continue..."
     return
   }
@@ -424,17 +475,19 @@ action_view_logs() {
 
 action_show_status() {
   header_info
-  local rpc2 real_ip upload_mb port
+  local rpc2 real_ip upload_mb port tls
   rpc2=$(detect_rpc2)
   real_ip=$(detect_real_ip)
   upload_mb=$(detect_upload_limit)
   port=$(detect_port)
+  tls=$(detect_tls)
 
   msg_info "Configuration"
   printf "  %-20s %s\n" "Upload limit:"    "${upload_mb} MiB"
   printf "  %-20s %s\n" "/RPC2 endpoint:"  "${rpc2}"
   printf "  %-20s %s\n" "Real IP forward:" "${real_ip}"
   printf "  %-20s %s\n" "BitTorrent port:" "${port}"
+  printf "  %-20s %s\n" "HTTPS:"           "${tls}"
   printf "  %-20s %s\n" "PHP version:"     "${PHP_VER}"
   printf "  %-20s %s\n" "ruTorrent:"       "$(cat ~/.rutorrent 2>/dev/null || echo unknown)"
   echo ""
@@ -462,19 +515,21 @@ while true; do
   REAL_IP=$(detect_real_ip)
   UPLOAD=$(detect_upload_limit)
   PORT=$(detect_port)
+  TLS=$(detect_tls)
 
   CHOICE=$(whiptail --title "ruTorrent Reconfigure" \
-    --menu "upload=${UPLOAD}MiB  rpc2=${RPC2}  real-ip=${REAL_IP}  port=${PORT}" \
-    21 65 10 \
+    --menu "upload=${UPLOAD}MiB  rpc2=${RPC2}  real-ip=${REAL_IP}  port=${PORT}  https=${TLS}" \
+    23 65 11 \
     "1" "Change web UI password" \
     "2" "Toggle /RPC2 endpoint         [${RPC2}]" \
     "3" "Toggle real IP forwarding      [${REAL_IP}]" \
-    "4" "Change upload size limit       [${UPLOAD} MiB]" \
-    "5" "Change BitTorrent port          [${PORT}]" \
-    "6" "Manage plugins" \
-    "7" "View logs" \
-    "8" "Restart services" \
-    "9" "Show status" \
+    "4" "Toggle HTTPS (self-signed)      [${TLS}]" \
+    "5" "Change upload size limit       [${UPLOAD} MiB]" \
+    "6" "Change BitTorrent port          [${PORT}]" \
+    "7" "Manage plugins" \
+    "8" "View logs" \
+    "9" "Restart services" \
+    "10" "Show status" \
     "0" "Exit" \
     3>&1 1>&2 2>&3) || break
 
@@ -482,12 +537,13 @@ while true; do
     1) action_change_password ;;
     2) action_toggle_rpc2 ;;
     3) action_toggle_real_ip ;;
-    4) action_change_upload_limit ;;
-    5) action_change_port ;;
-    6) action_manage_plugins ;;
-    7) action_view_logs ;;
-    8) action_restart_services ;;
-    9) action_show_status ;;
+    4) action_toggle_tls ;;
+    5) action_change_upload_limit ;;
+    6) action_change_port ;;
+    7) action_manage_plugins ;;
+    8) action_view_logs ;;
+    9) action_restart_services ;;
+    10) action_show_status ;;
     0) break ;;
   esac
 
