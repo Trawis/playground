@@ -61,6 +61,7 @@ done
 msg_ok "Set up directories"
 
 fetch_and_deploy_gh_release "rutorrent" "Novik/ruTorrent" "tarball" "latest" "/var/www/rutorrent"
+[[ -f /var/www/rutorrent/index.html ]] || { msg_error "ruTorrent download failed"; exit 1; }
 chown -R www-data:www-data /var/www/rutorrent
 
 msg_info "Patching filedrop upload limit"
@@ -110,7 +111,8 @@ network.port_range.set = 6881-6881
 network.port_random.set = no
 pieces.hash.on_completion.set = no
 schedule2 = watch_directory,5,5,load.start=/var/lib/rtorrent/.watch/*.torrent
-execute.nothrow = chmod,770,/run/rtorrent/rtorrent.sock
+execute.nothrow = chown,${RUTORRENT_SERVICE_USER}:www-data,/run/rtorrent/rtorrent.sock
+execute.nothrow = chmod,660,/run/rtorrent/rtorrent.sock
 EOF
 chown "${RUTORRENT_SERVICE_USER}:${RUTORRENT_SERVICE_USER}" "${RTORRENT_RC}"
 
