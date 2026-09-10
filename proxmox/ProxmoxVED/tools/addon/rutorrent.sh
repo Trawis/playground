@@ -240,13 +240,35 @@ EOF
   read -rp "Press Enter to continue..."
 }
 
+bootstrap_plugins_ini() {
+  local plugins_dir=/var/www/rutorrent/plugins
+  [[ -d "$plugins_dir" ]] || return 1
+
+  : >"$PLUGINS_INI"
+  local plugin_dir slug
+  for plugin_dir in "${plugins_dir}"/*/; do
+    slug=$(basename "$plugin_dir")
+    [[ -f "${plugin_dir}/init.js" ]] || continue
+    if [[ "$slug" == _* ]]; then
+      printf '[%s]\nenabled = yes\n\n' "$slug" >>"$PLUGINS_INI"
+    else
+      printf '[%s]\nenabled = no\n\n' "$slug" >>"$PLUGINS_INI"
+    fi
+  done
+  chown www-data:www-data "$PLUGINS_INI"
+}
+
 action_manage_plugins() {
   header_info
 
   if [[ ! -f "$PLUGINS_INI" ]]; then
-    msg_error "plugins.ini not found at $PLUGINS_INI"
-    read -rp "Press Enter to continue..."
-    return
+    msg_info "No plugins.ini found — initializing from installed plugins"
+    if ! bootstrap_plugins_ini; then
+      msg_error "plugins directory not found — is ruTorrent installed correctly?"
+      read -rp "Press Enter to continue..."
+      return
+    fi
+    msg_ok "Initialized plugins.ini (internal plugins enabled by default)"
   fi
 
   local -a slugs states
