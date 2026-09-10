@@ -1,0 +1,6 @@
+# Proxmox tag used to mark CTs whose normal onboot behavior is delegated
+# to pve-ip-mount-gate. Multiple existing tags are preserved.
+GATE_TAG="ipmount-gated"
+
+# Maximum time for the small stat(2) I/O health check against a mounted share.
+IO_TIMEOUT="8"

@@ -1,0 +1,8 @@
+[Unit]
+Description=Start pending LXCs after IP-backed external mounts are ready
+After=pve-cluster.service network-online.target
+Wants=network-online.target
+
+[Service]
+Type=oneshot
+ExecStart=/usr/local/sbin/pve-ip-mount-gate --cycle
