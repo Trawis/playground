@@ -7,6 +7,7 @@
     "updateable": true,
     "privileged": false,
     "interface_port": 80,
+    "has_arm": false,
     "documentation": "https://github.com/Novik/ruTorrent/wiki",
     "website": "https://github.com/Novik/ruTorrent",
     "logo": "https://cdn.jsdelivr.net/gh/selfhst/icons@main/webp/rutorrent.webp",

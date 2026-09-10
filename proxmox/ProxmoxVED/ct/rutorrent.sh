@@ -14,6 +14,7 @@ var_os="${var_os:-debian}"
 var_version="${var_version:-13}"
 var_unprivileged="${var_unprivileged:-1}"
 var_nesting="${var_nesting:-0}"
+var_arm64="${var_arm64:-no}"
 
 header_info "$APP"
 variables
@@ -152,24 +153,33 @@ function update_script() {
   fi
 
   if check_for_gh_release "rutorrent" "Novik/ruTorrent"; then
+    msg_info "Stopping Service"
+    systemctl stop nginx
+    msg_ok "Stopped Service"
+
     msg_info "Backing up ruTorrent configuration"
-    cp /var/www/rutorrent/conf/config.php /tmp/rutorrent-config.php 2>/dev/null || true
-    cp /var/www/rutorrent/conf/plugins.ini /tmp/rutorrent-plugins.ini 2>/dev/null || true
+    cp /var/www/rutorrent/conf/config.php /opt/rutorrent-config.php.bak 2>/dev/null || true
+    cp /var/www/rutorrent/conf/plugins.ini /opt/rutorrent-plugins.ini.bak 2>/dev/null || true
     msg_ok "Backed up ruTorrent configuration"
 
     CLEAN_INSTALL=1 fetch_and_deploy_gh_release "rutorrent" "Novik/ruTorrent" "tarball" "latest" "/var/www/rutorrent"
 
     msg_info "Restoring ruTorrent configuration"
-    [[ -f /tmp/rutorrent-config.php ]] && cp /tmp/rutorrent-config.php /var/www/rutorrent/conf/config.php
-    [[ -f /tmp/rutorrent-plugins.ini ]] && cp /tmp/rutorrent-plugins.ini /var/www/rutorrent/conf/plugins.ini
-    rm -f /tmp/rutorrent-config.php /tmp/rutorrent-plugins.ini
+    [[ -f /opt/rutorrent-config.php.bak ]] && cp /opt/rutorrent-config.php.bak /var/www/rutorrent/conf/config.php
+    [[ -f /opt/rutorrent-plugins.ini.bak ]] && cp /opt/rutorrent-plugins.ini.bak /var/www/rutorrent/conf/plugins.ini
+    rm -f /opt/rutorrent-config.php.bak /opt/rutorrent-plugins.ini.bak
     chown -R www-data:www-data /var/www/rutorrent
     msg_ok "Restored ruTorrent configuration"
+
+    PHP_VER=$(php -r 'echo PHP_MAJOR_VERSION.".".PHP_MINOR_VERSION;')
+    msg_info "Restarting Services"
+    systemctl restart "php${PHP_VER}-fpm"
+    systemctl start nginx
+    msg_ok "Restarted Services"
 
     msg_ok "Updated ${APP} successfully"
   fi
 
-  cleanup_lxc
   exit
 }
 
