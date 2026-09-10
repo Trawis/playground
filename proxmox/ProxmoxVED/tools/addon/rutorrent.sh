@@ -69,6 +69,11 @@ write_nginx_conf() {
 "
   fi
 
+  local backup="${NGINX_CONF}.bak.$$"
+  if [[ -f "$NGINX_CONF" ]]; then
+    cp "$NGINX_CONF" "$backup"
+  fi
+
   cat <<EOF >"$NGINX_CONF"
 server {
     listen 80;
@@ -99,9 +104,17 @@ ${real_ip_block}${rpc2_block}
 EOF
 
   if ! nginx -t &>/dev/null; then
-    msg_error "nginx config test failed — reverting"
+    if [[ -f "$backup" ]]; then
+      mv "$backup" "$NGINX_CONF"
+      msg_error "nginx config test failed — reverted to previous config"
+    else
+      rm -f "$NGINX_CONF"
+      msg_error "nginx config test failed — no previous config to revert to, removed invalid config"
+    fi
     return 1
   fi
+
+  rm -f "$backup"
 }
 
 action_change_password() {
