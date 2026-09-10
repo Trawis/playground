@@ -32,9 +32,23 @@ PLUGINS_INI=/var/www/rutorrent/conf/plugins.ini
 PHP_VER=$(php -r 'echo PHP_MAJOR_VERSION.".".PHP_MINOR_VERSION;' 2>/dev/null || echo "8.4")
 PHP_UPLOAD_INI=/etc/php/${PHP_VER}/fpm/conf.d/99-rutorrent-upload.ini
 FILEDROP_CONF=/var/www/rutorrent/plugins/filedrop/conf.php
+RTORRENT_RC=/root/.rtorrent.rc
 
 detect_upload_limit() {
   grep -oP 'client_max_body_size \K[0-9]+' "$NGINX_CONF" 2>/dev/null || echo "32"
+}
+
+detect_port() {
+  grep -oP 'network\.port_range\.set = \K[0-9]+' "$RTORRENT_RC" 2>/dev/null || echo "50000"
+}
+
+wait_for_rtorrent_socket() {
+  local i
+  for i in $(seq 1 20); do
+    [[ -S /run/rtorrent/rtorrent.sock ]] && return 0
+    sleep 1
+  done
+  return 1
 }
 
 detect_rpc2() {
@@ -324,17 +338,78 @@ action_manage_plugins() {
   read -rp "Press Enter to continue..."
 }
 
+action_change_port() {
+  header_info
+  local current_port new_port
+
+  current_port=$(detect_port)
+
+  new_port=$(whiptail --inputbox \
+    "BitTorrent listen port:\n\n(forward this port on your router/firewall if downloading from outside your LAN)" \
+    11 60 "$current_port" --title "BitTorrent Port" 3>&1 1>&2 2>&3) || return
+  [[ -z "$new_port" ]] && return
+
+  if ! [[ "$new_port" =~ ^[0-9]+$ ]] || [[ "$new_port" -lt 1024 ]] || [[ "$new_port" -gt 65535 ]]; then
+    msg_error "Invalid port — must be an integer between 1024 and 65535"
+    read -rp "Press Enter to continue..."
+    return
+  fi
+
+  sed -i "s/^network\.port_range\.set = .*/network.port_range.set = ${new_port}-${new_port}/" "$RTORRENT_RC"
+
+  msg_info "Restarting rTorrent"
+  systemctl restart rtorrent
+  if wait_for_rtorrent_socket; then
+    msg_ok "rTorrent restarted on port ${new_port}"
+  else
+    msg_warn "rTorrent socket not found after restart — check 'systemctl status rtorrent'"
+  fi
+  echo ""
+  read -rp "Press Enter to continue..."
+}
+
+action_restart_services() {
+  header_info
+
+  msg_info "Restarting rTorrent"
+  systemctl restart rtorrent
+  if wait_for_rtorrent_socket; then
+    msg_ok "rTorrent restarted"
+  else
+    msg_warn "rTorrent socket not found after restart — check 'systemctl status rtorrent'"
+  fi
+
+  msg_info "Restarting nginx"
+  if systemctl restart nginx; then
+    msg_ok "nginx restarted"
+  else
+    msg_error "nginx failed to restart — check 'systemctl status nginx'"
+  fi
+
+  msg_info "Restarting PHP-FPM"
+  if systemctl restart "php${PHP_VER}-fpm"; then
+    msg_ok "PHP-FPM restarted"
+  else
+    msg_error "PHP-FPM failed to restart — check 'systemctl status php${PHP_VER}-fpm'"
+  fi
+
+  echo ""
+  read -rp "Press Enter to continue..."
+}
+
 action_show_status() {
   header_info
-  local rpc2 real_ip upload_mb
+  local rpc2 real_ip upload_mb port
   rpc2=$(detect_rpc2)
   real_ip=$(detect_real_ip)
   upload_mb=$(detect_upload_limit)
+  port=$(detect_port)
 
   msg_info "Configuration"
   printf "  %-20s %s\n" "Upload limit:"    "${upload_mb} MiB"
   printf "  %-20s %s\n" "/RPC2 endpoint:"  "${rpc2}"
   printf "  %-20s %s\n" "Real IP forward:" "${real_ip}"
+  printf "  %-20s %s\n" "BitTorrent port:" "${port}"
   printf "  %-20s %s\n" "PHP version:"     "${PHP_VER}"
   printf "  %-20s %s\n" "ruTorrent:"       "$(cat ~/.rutorrent 2>/dev/null || echo unknown)"
   echo ""
@@ -361,16 +436,19 @@ while true; do
   RPC2=$(detect_rpc2)
   REAL_IP=$(detect_real_ip)
   UPLOAD=$(detect_upload_limit)
+  PORT=$(detect_port)
 
   CHOICE=$(whiptail --title "ruTorrent Reconfigure" \
-    --menu "upload=${UPLOAD}MiB  rpc2=${RPC2}  real-ip=${REAL_IP}" \
-    17 65 7 \
+    --menu "upload=${UPLOAD}MiB  rpc2=${RPC2}  real-ip=${REAL_IP}  port=${PORT}" \
+    19 65 9 \
     "1" "Change web UI password" \
     "2" "Toggle /RPC2 endpoint         [${RPC2}]" \
     "3" "Toggle real IP forwarding      [${REAL_IP}]" \
     "4" "Change upload size limit       [${UPLOAD} MiB]" \
-    "5" "Manage plugins" \
-    "6" "Show status" \
+    "5" "Change BitTorrent port          [${PORT}]" \
+    "6" "Manage plugins" \
+    "7" "Restart services" \
+    "8" "Show status" \
     "0" "Exit" \
     3>&1 1>&2 2>&3) || break
 
@@ -379,8 +457,10 @@ while true; do
     2) action_toggle_rpc2 ;;
     3) action_toggle_real_ip ;;
     4) action_change_upload_limit ;;
-    5) action_manage_plugins ;;
-    6) action_show_status ;;
+    5) action_change_port ;;
+    6) action_manage_plugins ;;
+    7) action_restart_services ;;
+    8) action_show_status ;;
     0) break ;;
   esac
 
