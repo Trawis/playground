@@ -32,7 +32,6 @@ msg_ok "Installed Filen WebDAV"
 
 msg_info "Writing server configuration"
 if [[ "${FILEN_MODE}" == "standalone" ]]; then
-  # Build optional 2FA field
   if [[ -n "${FILEN_2FA}" ]]; then
     TFA_LINE="  twoFactorCode: \"${FILEN_2FA}\","
   else
