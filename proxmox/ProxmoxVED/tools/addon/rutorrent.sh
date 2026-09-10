@@ -397,6 +397,31 @@ action_restart_services() {
   read -rp "Press Enter to continue..."
 }
 
+action_view_logs() {
+  header_info
+  local source
+
+  source=$(whiptail --menu "View logs (last 200 lines):" 14 55 4 \
+    "1" "rTorrent (journald)" \
+    "2" "nginx access log" \
+    "3" "nginx error log" \
+    "4" "PHP-FPM (journald)" \
+    --title "Log Viewer" 3>&1 1>&2 2>&3) || return
+
+  local tmp
+  tmp=$(mktemp)
+
+  case "$source" in
+    1) journalctl -u rtorrent -n 200 --no-pager >"$tmp" 2>&1 ;;
+    2) tail -n 200 /var/log/nginx/access.log >"$tmp" 2>&1 ;;
+    3) tail -n 200 /var/log/nginx/error.log >"$tmp" 2>&1 ;;
+    4) journalctl -u "php${PHP_VER}-fpm" -n 200 --no-pager >"$tmp" 2>&1 ;;
+  esac
+
+  whiptail --scrolltext --title "Log Viewer" --textbox "$tmp" 25 100
+  rm -f "$tmp"
+}
+
 action_show_status() {
   header_info
   local rpc2 real_ip upload_mb port
@@ -440,15 +465,16 @@ while true; do
 
   CHOICE=$(whiptail --title "ruTorrent Reconfigure" \
     --menu "upload=${UPLOAD}MiB  rpc2=${RPC2}  real-ip=${REAL_IP}  port=${PORT}" \
-    19 65 9 \
+    21 65 10 \
     "1" "Change web UI password" \
     "2" "Toggle /RPC2 endpoint         [${RPC2}]" \
     "3" "Toggle real IP forwarding      [${REAL_IP}]" \
     "4" "Change upload size limit       [${UPLOAD} MiB]" \
     "5" "Change BitTorrent port          [${PORT}]" \
     "6" "Manage plugins" \
-    "7" "Restart services" \
-    "8" "Show status" \
+    "7" "View logs" \
+    "8" "Restart services" \
+    "9" "Show status" \
     "0" "Exit" \
     3>&1 1>&2 2>&3) || break
 
@@ -459,8 +485,9 @@ while true; do
     4) action_change_upload_limit ;;
     5) action_change_port ;;
     6) action_manage_plugins ;;
-    7) action_restart_services ;;
-    8) action_show_status ;;
+    7) action_view_logs ;;
+    8) action_restart_services ;;
+    9) action_show_status ;;
     0) break ;;
   esac
 
