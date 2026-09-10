@@ -44,6 +44,12 @@ detect_port() {
   grep -oP 'network\.port_range\.set = \K[0-9]+' "$RTORRENT_RC" 2>/dev/null || echo "50000"
 }
 
+detect_storage_base() {
+  local download_dir
+  download_dir=$(grep -oP 'directory\.default\.set = \K.*' "$RTORRENT_RC" 2>/dev/null)
+  [[ -n "$download_dir" ]] && dirname "$download_dir" || echo "/var/lib/rtorrent"
+}
+
 wait_for_rtorrent_socket() {
   local i
   for i in $(seq 1 20); do
@@ -473,6 +479,107 @@ action_view_logs() {
   rm -f "$tmp"
 }
 
+
+action_change_storage_path() {
+  header_info
+  local current_base new_base
+
+  current_base=$(detect_storage_base)
+
+  new_base=$(whiptail --inputbox \
+    "Base directory for downloads, session, and watch data:\n\nCurrent: ${current_base}\n\n(existing data will be moved here — this can take a while for large libraries)" \
+    13 65 "$current_base" --title "Storage Path" 3>&1 1>&2 2>&3) || return
+  [[ -z "$new_base" ]] && return
+
+  if [[ "$new_base" != /* ]]; then
+    msg_error "Path must be absolute (start with /)"
+    read -rp "Press Enter to continue..."
+    return
+  fi
+
+  if [[ "$new_base" == "$current_base" ]]; then
+    msg_error "New path is the same as the current path — nothing to do"
+    read -rp "Press Enter to continue..."
+    return
+  fi
+
+  if [[ "$new_base" == "$current_base"/* || "$current_base" == "$new_base"/* ]]; then
+    msg_error "New path cannot be nested inside the current path (or vice versa)"
+    read -rp "Press Enter to continue..."
+    return
+  fi
+
+  mkdir -p "$new_base" || {
+    msg_error "Could not create ${new_base}"
+    read -rp "Press Enter to continue..."
+    return
+  }
+
+  local used_kb avail_kb
+  used_kb=$(du -sk "$current_base" 2>/dev/null | awk '{print $1}')
+  avail_kb=$(df -Pk "$new_base" 2>/dev/null | awk 'NR==2 {print $4}')
+  if [[ -n "$used_kb" && -n "$avail_kb" ]] && (( avail_kb < used_kb )); then
+    msg_error "Not enough free space at ${new_base} (need ~$((used_kb / 1024)) MiB, have $((avail_kb / 1024)) MiB)"
+    read -rp "Press Enter to continue..."
+    return
+  fi
+
+  whiptail --yesno \
+    "This will:\n\n  1. Stop rTorrent\n  2. Move downloads/session/watch data from\n     ${current_base} to ${new_base}\n  3. Update rTorrent's configuration\n  4. Restart rTorrent\n\nThis cannot be easily undone if it fails partway.\nContinue?" \
+    15 65 --title "Confirm Storage Migration" --defaultno 3>&1 1>&2 2>&3 || return
+
+  local rc_backup="${RTORRENT_RC}.bak.$$"
+  cp "$RTORRENT_RC" "$rc_backup"
+
+  msg_info "Stopping rTorrent"
+  systemctl stop rtorrent
+  msg_ok "Stopped rTorrent"
+
+  msg_info "Moving data to ${new_base}"
+  local moved=()
+  local sub
+  for sub in downloads session .watch; do
+    if [[ -d "${current_base}/${sub}" ]]; then
+      mv "${current_base}/${sub}" "${new_base}/${sub}"
+      moved+=("$sub")
+    else
+      mkdir -p "${new_base}/${sub}"
+    fi
+  done
+  msg_ok "Moved data to ${new_base}"
+
+  sed -i \
+    -e "s#^directory\.default\.set = .*#directory.default.set = ${new_base}/downloads#" \
+    -e "s#^session\.path\.set = .*#session.path.set = ${new_base}/session#" \
+    -e "s#load\.start=[^[:space:]]*/\.watch/#load.start=${new_base}/.watch/#" \
+    "$RTORRENT_RC"
+
+  msg_info "Starting rTorrent"
+  systemctl start rtorrent
+  if wait_for_rtorrent_socket; then
+    msg_ok "rTorrent started on ${new_base}"
+    rm -f "$rc_backup"
+  else
+    msg_error "rTorrent failed to start — rolling back"
+    systemctl stop rtorrent 2>/dev/null
+    mv "$rc_backup" "$RTORRENT_RC"
+    local s
+    for s in "${moved[@]}"; do
+      rm -rf "${current_base}/${s}"
+      mv "${new_base}/${s}" "${current_base}/${s}"
+    done
+    systemctl start rtorrent
+    if wait_for_rtorrent_socket; then
+      msg_ok "Rolled back to ${current_base} — rTorrent running again"
+    else
+      msg_error "Rollback also failed to start rTorrent — check 'systemctl status rtorrent' manually"
+    fi
+  fi
+  echo ""
+  read -rp "Press Enter to continue..."
+}
+
+
 action_show_status() {
   header_info
   local rpc2 real_ip upload_mb port tls
@@ -488,6 +595,7 @@ action_show_status() {
   printf "  %-20s %s\n" "Real IP forward:" "${real_ip}"
   printf "  %-20s %s\n" "BitTorrent port:" "${port}"
   printf "  %-20s %s\n" "HTTPS:"           "${tls}"
+  printf "  %-20s %s\n" "Storage path:"    "$(detect_storage_base)"
   printf "  %-20s %s\n" "PHP version:"     "${PHP_VER}"
   printf "  %-20s %s\n" "ruTorrent:"       "$(cat ~/.rutorrent 2>/dev/null || echo unknown)"
   echo ""
@@ -519,17 +627,18 @@ while true; do
 
   CHOICE=$(whiptail --title "ruTorrent Reconfigure" \
     --menu "upload=${UPLOAD}MiB  rpc2=${RPC2}  real-ip=${REAL_IP}  port=${PORT}  https=${TLS}" \
-    23 65 11 \
+    25 65 12 \
     "1" "Change web UI password" \
     "2" "Toggle /RPC2 endpoint         [${RPC2}]" \
     "3" "Toggle real IP forwarding      [${REAL_IP}]" \
     "4" "Toggle HTTPS (self-signed)      [${TLS}]" \
     "5" "Change upload size limit       [${UPLOAD} MiB]" \
     "6" "Change BitTorrent port          [${PORT}]" \
-    "7" "Manage plugins" \
-    "8" "View logs" \
-    "9" "Restart services" \
-    "10" "Show status" \
+    "7" "Move storage path" \
+    "8" "Manage plugins" \
+    "9" "View logs" \
+    "10" "Restart services" \
+    "11" "Show status" \
     "0" "Exit" \
     3>&1 1>&2 2>&3) || break
 
@@ -540,10 +649,11 @@ while true; do
     4) action_toggle_tls ;;
     5) action_change_upload_limit ;;
     6) action_change_port ;;
-    7) action_manage_plugins ;;
-    8) action_view_logs ;;
-    9) action_restart_services ;;
-    10) action_show_status ;;
+    7) action_change_storage_path ;;
+    8) action_manage_plugins ;;
+    9) action_view_logs ;;
+    10) action_restart_services ;;
+    11) action_show_status ;;
     0) break ;;
   esac
 
