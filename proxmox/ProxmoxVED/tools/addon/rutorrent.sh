@@ -137,12 +137,6 @@ action_change_password() {
   htpasswd -b "$HTPASSWD" "$username" "$newpass" &>/dev/null
   systemctl reload nginx
 
-  local creds_user
-  creds_user=$(grep "^Username:" ~/rutorrent.creds 2>/dev/null | awk '{print $2}')
-  if [[ "$username" == "$creds_user" ]]; then
-    sed -i "s/^Password:.*/Password: ${newpass}/" ~/rutorrent.creds 2>/dev/null || true
-  fi
-
   msg_ok "Password updated for '${username}'"
   msg_info "New password: ${newpass}"
   echo ""
@@ -353,12 +347,8 @@ action_show_status() {
     fi
   done
   echo ""
-  msg_info "Credentials"
-  if [[ -f ~/rutorrent.creds ]]; then
-    cat ~/rutorrent.creds
-  else
-    msg_error "~/rutorrent.creds not found"
-  fi
+  msg_info "Web UI users"
+  awk -F: '{print "  "$1}' "$HTPASSWD" 2>/dev/null || msg_error "$HTPASSWD not found"
   echo ""
   read -rp "Press Enter to continue..."
 }
