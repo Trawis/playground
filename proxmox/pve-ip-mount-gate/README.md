@@ -65,8 +65,8 @@ The timer runs roughly 20 seconds after boot and then every 60 seconds.
 Host mounts:
 
 ```text
-/mnt/pve/media      -> 192.168.1.241:/volume1/media
-/mnt/pve/downloads  -> 192.168.1.241:/volume2/downloads
+/mnt/pve/media      -> 203.0.113.10:/volume1/media
+/mnt/pve/downloads  -> 203.0.113.10:/volume2/downloads
 /mnt/local-ssd      -> local disk
 ```
 
