@@ -1,0 +1,11 @@
+[Unit]
+Description=Retry missing IP-backed CIFS/NFS mounts every 60 seconds
+
+[Timer]
+OnBootSec=20s
+OnUnitActiveSec=60s
+AccuracySec=1s
+Unit=pve-ip-mount-retry.service
+
+[Install]
+WantedBy=timers.target
