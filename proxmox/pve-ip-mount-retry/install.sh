@@ -52,7 +52,11 @@ echo
 echo "================================================================"
 echo " IP-BACKED NETWORK MOUNTS"
 echo "================================================================"
-findmnt -t cifs,nfs,nfs4 -o TARGET,SOURCE,FSTYPE,OPTIONS || true
+# TARGET/SOURCE/FSTYPE only - OPTIONS is deliberately omitted since a CIFS
+# mount's options can carry a credentials= file path or embedded
+# username=/password= and this summary is meant for diagnosis, not for
+# echoing mount configuration.
+findmnt -t cifs,nfs,nfs4 -o TARGET,SOURCE,FSTYPE || true
 
 echo
 echo "================================================================"

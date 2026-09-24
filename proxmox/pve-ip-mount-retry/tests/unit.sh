@@ -132,6 +132,53 @@ FINDMNT_M_SOURCE="203.0.113.241:/volume1/media"
 run_entry "203.0.113.24:/volume1/media" "/mnt/media" "nfs"; out="$LAST_OUTPUT"
 assert_match "a prefix IP is not a substring false-positive match" "BLOCKED:" "$out"
 
+# Regression tests for full source identity: comparing only the server
+# endpoint (as an earlier version of this script did) would wrongly treat
+# two different shares/exports on the same server as equivalent. The
+# comparison must be against the complete source string.
+
+# CIFS: same server + same share -> OK
+reset_stubs
+FINDMNT_M_SOURCE="//203.0.113.10/media"
+run_entry "//203.0.113.10/media" "/mnt/media" "cifs"; out="$LAST_OUTPUT"
+assert_match "CIFS: same IP + same share is OK" "OK:" "$out"
+
+# CIFS: same server, different share -> BLOCKED
+reset_stubs
+FINDMNT_M_SOURCE="//203.0.113.10/backups"
+run_entry "//203.0.113.10/media" "/mnt/media" "cifs"; out="$LAST_OUTPUT"
+assert_match "CIFS: same IP + different share is BLOCKED" "BLOCKED:" "$out"
+
+# CIFS: different server, same-looking share path -> BLOCKED
+reset_stubs
+FINDMNT_M_SOURCE="//203.0.113.11/media"
+run_entry "//203.0.113.10/media" "/mnt/media" "cifs"; out="$LAST_OUTPUT"
+assert_match "CIFS: different IP + same-looking path is BLOCKED" "BLOCKED:" "$out"
+
+# NFS: same server + same export -> OK
+reset_stubs
+FINDMNT_M_SOURCE="203.0.113.20:/exports/media"
+run_entry "203.0.113.20:/exports/media" "/mnt/media" "nfs"; out="$LAST_OUTPUT"
+assert_match "NFS: same IP + same export is OK" "OK:" "$out"
+
+# NFS: same server, different export -> BLOCKED
+reset_stubs
+FINDMNT_M_SOURCE="203.0.113.20:/exports/backups"
+run_entry "203.0.113.20:/exports/media" "/mnt/media" "nfs"; out="$LAST_OUTPUT"
+assert_match "NFS: same IP + different export is BLOCKED" "BLOCKED:" "$out"
+
+# NFS: different server, same-looking export path -> BLOCKED
+reset_stubs
+FINDMNT_M_SOURCE="203.0.113.21:/exports/media"
+run_entry "203.0.113.20:/exports/media" "/mnt/media" "nfs"; out="$LAST_OUTPUT"
+assert_match "NFS: different IP + same export is BLOCKED" "BLOCKED:" "$out"
+
+# An unrelated local filesystem occupying the target -> BLOCKED, not OK.
+reset_stubs
+FINDMNT_M_SOURCE="/dev/sdb1"
+run_entry "203.0.113.20:/exports/media" "/mnt/media" "nfs"; out="$LAST_OUTPUT"
+assert_match "an unrelated local filesystem at the target is BLOCKED" "BLOCKED:" "$out"
+
 # --- 3. Missing mount handling -----------------------------------------------
 
 reset_stubs

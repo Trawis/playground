@@ -25,12 +25,16 @@ require_commands() {
 }
 
 # Match either an IPv4 address or a bracketed IPv6 address and print the
-# matched text (nothing, if neither is present). This is intentionally used
-# for *both* discovery (is this fstab entry IP-backed at all?) and for
-# comparing a configured source against a live mount's source: comparing the
-# full matched token with `==` means a shorter address (e.g. 203.0.113.1)
-# can never be mistaken for one it's merely a substring of
-# (e.g. 203.0.113.10), unlike a loose `*"$ip"*` glob check.
+# matched text (nothing, if neither is present).
+#
+# This is used ONLY to decide whether an /etc/fstab entry is IP-backed at
+# all (the entry point into everything else this script does). It is
+# deliberately NOT used to decide whether an already-mounted target is the
+# expected one - see the full-source comparison in handle_entry(). Two
+# shares on the same server, e.g. //203.0.113.10/media and
+# //203.0.113.10/backups, share an endpoint but are different remote
+# resources, and matching on the endpoint alone would treat them as
+# interchangeable.
 IPV4_RE='([0-9]{1,3}\.){3}[0-9]{1,3}'
 IPV6_RE='\[[0-9A-Fa-f:]+\]'
 
@@ -53,16 +57,21 @@ blocked=0
 # described in the README:
 #
 #   target already mounted (exact mountpoint)
-#       -> matches configured endpoint: OK, leave alone
-#       -> does not match:              BLOCKED, leave alone, report it
+#       -> full source matches configured source: OK, leave alone
+#       -> full source differs (same server, different share/export;
+#          different server; or an unrelated filesystem entirely):
+#                                        BLOCKED, leave alone, report it
 #   target missing
 #       -> no generated .mount unit:    WARN, skip
 #       -> unit already activating:     WAIT, skip this cycle
 #       -> otherwise:                   reset-failed, then start --no-block
 handle_entry() {
     local source="$1" target="$2" fstype="$3"
-    local endpoint actual actual_endpoint unit state
+    local endpoint actual unit state
 
+    # Endpoint extraction only decides whether this fstab entry is
+    # IP-backed at all; it plays no part in the already-mounted check
+    # below, which compares full source strings instead.
     endpoint="$(extract_endpoint "$source")"
     [[ -n "$endpoint" ]] || return 0
     found=$((found + 1))
@@ -71,14 +80,26 @@ handle_entry() {
     # an absent remote mount must never be mistaken for the underlying
     # local directory, and a mountpoint that's already occupied must never
     # be mounted over, unmounted, or otherwise modified.
-    actual="$(findmnt -rn -M "$target" -o SOURCE 2>/dev/null || true)"
+    #
+    # The live source is compared to the configured source as a complete
+    # string (--raw plus the same \xNN decode used for the fstab side
+    # below), not just by server endpoint: same-server-different-share
+    # (//203.0.113.10/media vs //203.0.113.10/backups), a different
+    # server, or an unrelated local filesystem occupying the target must
+    # all be reported as BLOCKED rather than accepted as OK. This is
+    # intentionally an exact match with no further normalization - if a
+    # real deployment turns out to need one (e.g. a formatting difference
+    # between what's written in /etc/fstab and what the kernel reports
+    # back), that should be added deliberately once observed, not guessed
+    # at here; until then, an unverifiable mismatch fails safe as BLOCKED.
+    actual="$(findmnt -rn -M "$target" -o SOURCE --raw 2>/dev/null || true)"
+    actual="$(printf '%b' "$actual")"
     if [[ -n "$actual" ]]; then
-        actual_endpoint="$(extract_endpoint "$actual")"
-        if [[ -n "$actual_endpoint" && "$actual_endpoint" == "$endpoint" ]]; then
+        if [[ "$actual" == "$source" ]]; then
             log "OK: already mounted: $target <- $actual ($fstype)"
         else
             blocked=$((blocked + 1))
-            log "BLOCKED: $target is mounted from an unexpected source ($actual); expected $endpoint. Leaving it alone."
+            log "BLOCKED: $target is mounted from an unexpected source ($actual); expected $source. Leaving it alone."
         fi
         return 0
     fi
