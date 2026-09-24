@@ -1,40 +1,86 @@
 #!/usr/bin/env bash
-set -u
+set -uo pipefail
 
-TAG="pve-ip-mount-retry"
+APP="pve-ip-mount-retry"
 
 log() {
-    printf '%s\n' "$*"
-    logger -t "$TAG" -- "$*" 2>/dev/null || true
+    printf '%s [%s] %s\n' "$(date '+%F %T')" "$APP" "$*"
+    logger -t "$APP" -- "$*" 2>/dev/null || true
 }
 
-# Match IPv4 or bracketed IPv6 somewhere in the mount source.
-is_ip_source() {
+die() {
+    log "ERROR: $*" >&2
+    exit 1
+}
+
+require_root() {
+    [[ ${EUID:-$(id -u)} -eq 0 ]] || die "must run as root"
+}
+
+require_commands() {
+    local cmd
+    for cmd in "$@"; do
+        command -v "$cmd" >/dev/null 2>&1 || die "missing required command: $cmd"
+    done
+}
+
+# Match either an IPv4 address or a bracketed IPv6 address and print the
+# matched text (nothing, if neither is present). This is intentionally used
+# for *both* discovery (is this fstab entry IP-backed at all?) and for
+# comparing a configured source against a live mount's source: comparing the
+# full matched token with `==` means a shorter address (e.g. 203.0.113.1)
+# can never be mistaken for one it's merely a substring of
+# (e.g. 203.0.113.10), unlike a loose `*"$ip"*` glob check.
+IPV4_RE='([0-9]{1,3}\.){3}[0-9]{1,3}'
+IPV6_RE='\[[0-9A-Fa-f:]+\]'
+
+extract_endpoint() {
     local s="$1"
-    [[ "$s" =~ ([0-9]{1,3}\.){3}[0-9]{1,3} ]] || \
-    [[ "$s" =~ \[[0-9A-Fa-f:]+\] ]]
+    if [[ "$s" =~ $IPV4_RE ]]; then
+        printf '%s' "${BASH_REMATCH[0]}"
+    elif [[ "$s" =~ $IPV6_RE ]]; then
+        printf '%s' "${BASH_REMATCH[0]}"
+    fi
 }
 
 found=0
 requested=0
+waited=0
+blocked=0
 
-while read -r source target fstype; do
-    [[ -n "${source:-}" && -n "${target:-}" && -n "${fstype:-}" ]] || continue
+# Evaluate one /etc/fstab entry (already filtered to cifs/nfs/nfs4 by the
+# caller) and, if it's IP-backed, bring it in line with the state machine
+# described in the README:
+#
+#   target already mounted (exact mountpoint)
+#       -> matches configured endpoint: OK, leave alone
+#       -> does not match:              BLOCKED, leave alone, report it
+#   target missing
+#       -> no generated .mount unit:    WARN, skip
+#       -> unit already activating:     WAIT, skip this cycle
+#       -> otherwise:                   reset-failed, then start --no-block
+handle_entry() {
+    local source="$1" target="$2" fstype="$3"
+    local endpoint actual actual_endpoint unit state
 
-    # findmnt escapes spaces etc. as \xNN; decode them.
-    source="$(printf '%b' "$source")"
-    target="$(printf '%b' "$target")"
-
-    # We only care about network shares whose source contains an IP.
-    is_ip_source "$source" || continue
-
+    endpoint="$(extract_endpoint "$source")"
+    [[ -n "$endpoint" ]] || return 0
     found=$((found + 1))
 
-    # Exact mountpoint check. If something is already mounted there,
-    # NEVER touch it.
-    if findmnt -rn -M "$target" >/dev/null 2>&1; then
-        log "OK: already mounted: $target <- $source ($fstype)"
-        continue
+    # Exact mountpoint check (findmnt -M), never a path-resolving lookup:
+    # an absent remote mount must never be mistaken for the underlying
+    # local directory, and a mountpoint that's already occupied must never
+    # be mounted over, unmounted, or otherwise modified.
+    actual="$(findmnt -rn -M "$target" -o SOURCE 2>/dev/null || true)"
+    if [[ -n "$actual" ]]; then
+        actual_endpoint="$(extract_endpoint "$actual")"
+        if [[ -n "$actual_endpoint" && "$actual_endpoint" == "$endpoint" ]]; then
+            log "OK: already mounted: $target <- $actual ($fstype)"
+        else
+            blocked=$((blocked + 1))
+            log "BLOCKED: $target is mounted from an unexpected source ($actual); expected $endpoint. Leaving it alone."
+        fi
+        return 0
     fi
 
     # /mnt/data -> mnt-data.mount
@@ -43,7 +89,17 @@ while read -r source target fstype; do
     # The mount unit should have been generated from /etc/fstab.
     if ! systemctl cat "$unit" >/dev/null 2>&1; then
         log "WARN: no systemd mount unit for $target ($unit); skipping"
-        continue
+        return 0
+    fi
+
+    # A unit that's already activating (our previous cycle's request, or
+    # systemd's own retry) should be left to finish. Resetting/restarting
+    # it here would just interrupt an attempt already in flight.
+    state="$(systemctl is-active "$unit" 2>/dev/null || true)"
+    if [[ "$state" == "activating" ]]; then
+        waited=$((waited + 1))
+        log "WAIT: $unit is already activating; skipping this cycle"
+        return 0
     fi
 
     # Clear previous failed state. Safe if it isn't failed.
@@ -52,27 +108,46 @@ while read -r source target fstype; do
     # Non-blocking is deliberate:
     # if a NAS is still offline we don't want this retry service hanging.
     if systemctl start --no-block "$unit"; then
-        log "RETRY: requested start of $unit for $target <- $source ($fstype)"
         requested=$((requested + 1))
+        log "RETRY: requested start of $unit for $target <- $source ($fstype)"
     else
         log "WARN: could not request start of $unit for $target"
     fi
+}
 
-done < <(
-    findmnt \
-        --fstab \
-        --noheadings \
-        --raw \
-        --types cifs,nfs,nfs4 \
-        --output SOURCE,TARGET,FSTYPE \
-        2>/dev/null
-)
+main() {
+    require_root
+    require_commands findmnt systemctl systemd-escape
 
-if (( found == 0 )); then
-    log "No IP-backed CIFS/NFS mounts found in /etc/fstab"
-elif (( requested == 0 )); then
-    log "No missing IP-backed CIFS/NFS mounts needed a retry"
+    while read -r source target fstype; do
+        [[ -n "${source:-}" && -n "${target:-}" && -n "${fstype:-}" ]] || continue
+
+        # findmnt escapes spaces etc. as \xNN; decode them.
+        source="$(printf '%b' "$source")"
+        target="$(printf '%b' "$target")"
+
+        handle_entry "$source" "$target" "$fstype"
+    done < <(
+        findmnt \
+            --fstab \
+            --noheadings \
+            --raw \
+            --types cifs,nfs,nfs4 \
+            --output SOURCE,TARGET,FSTYPE \
+            2>/dev/null
+    )
+
+    if (( found == 0 )); then
+        log "No IP-backed CIFS/NFS mounts found in /etc/fstab"
+    else
+        log "checked $found IP-backed mount(s): $requested retried, $waited already activating, $blocked blocked on an unexpected source"
+    fi
+
+    # An unavailable NAS is an expected condition, not a service failure.
+    exit 0
+}
+
+# Allow this file to be sourced (by the test suite) without running main.
+if [[ "${BASH_SOURCE[0]:-$0}" == "${0}" ]]; then
+    main "$@"
 fi
-
-# An unavailable NAS is an expected condition, not a service failure.
-exit 0
