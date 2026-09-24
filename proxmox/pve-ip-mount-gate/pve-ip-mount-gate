@@ -64,13 +64,14 @@ decode_findmnt_field() {
 #             is only accepted if its live source matches this exactly.
 #           "endpoint": source is just the server address. This is a
 #             deliberately weaker identity, used only when the complete
-#             remote resource genuinely couldn't be determined (some
-#             Proxmox storage.cfg shapes - see README) or when carrying
-#             forward a record from the previous (pre-4-field) schema
-#             during upgrade. An already-mounted target is accepted if its
-#             live source's server address matches - same as this
-#             project's original behavior, but as an exact match on the
-#             extracted address rather than a substring check.
+#             remote resource genuinely couldn't be determined (a
+#             storage.cfg entry missing the field it needs - see README)
+#             or when carrying forward a record from the previous
+#             (pre-4-field) schema during upgrade. An already-mounted
+#             target is accepted if its live source's server address
+#             matches - same as this project's original behavior, but as
+#             an exact match on the extracted address rather than a
+#             substring check.
 # origin  - free-text provenance for diagnostics/status (e.g.
 #           "fstab:nfs4", "pve:cifs:mystorage", "mounted:cifs").
 #
@@ -101,6 +102,76 @@ emit_remote_mount() {
     printf '%s|%s|%s|%s\n' "$target" "$source" "$kind" "$origin"
 }
 
+# Parse a Proxmox storage.cfg file and print one target|source|kind|origin
+# line per nfs:/cifs: storage definition - the same record shape
+# emit_remote_mount() produces elsewhere. This is a standalone function
+# (rather than inlined into discover_current_mounts) specifically so the
+# test suite can run this exact parser against a fixture file instead of
+# a duplicated copy that could silently drift from production behavior.
+# Prints nothing if the file doesn't exist or isn't readable.
+#
+# nfs: the documented `export` field is the exact path exported by the
+# server, so `server:export` reconstructs the full source (kind=full) -
+# the same identity a matching fstab entry would have.
+#
+# cifs: the documented `share` field gives the exact share name, and
+# Proxmox's own CIFS mount source construction appends an optional
+# `subdir` directly after it, so `//server/share<subdir>` (subdir already
+# carries its own leading slash, e.g. "/movies") reconstructs the full
+# source (kind=full) whenever `share` is set, subdir or not.
+#
+# Anything without enough to reconstruct the exact remote resource (an
+# nfs: entry with no `export`, or a cifs: entry with no `share`) still
+# gets a record, just at endpoint (server-only) identity, rather than
+# being dropped and silently stopping the gate from tracking it at all.
+parse_storage_cfg() {
+    local file="$1"
+    [[ -r "$file" ]] || return 0
+    awk '
+        function flush() {
+            if ((type == "nfs" || type == "cifs") && server != "") {
+                p = path
+                if (p == "") p = "/mnt/pve/" id
+                if (type == "nfs" && xport != "") {
+                    src = server ":" xport
+                    kind = "full"
+                } else if (type == "cifs" && share != "") {
+                    src = "//" server "/" share subdir
+                    kind = "full"
+                } else {
+                    src = server
+                    kind = "endpoint"
+                }
+                print p "|" src "|" kind "|pve:" type ":" id
+            }
+        }
+        /^[^[:space:]][^:]*:[[:space:]]+/ {
+            flush()
+            line=$0
+            type=line; sub(/:.*/, "", type)
+            id=line; sub(/^[^:]+:[[:space:]]*/, "", id)
+            server=""; path=""; xport=""; share=""; subdir=""
+            next
+        }
+        /^[[:space:]]+server[[:space:]]+/ {
+            server=$0; sub(/^[[:space:]]+server[[:space:]]+/, "", server); next
+        }
+        /^[[:space:]]+path[[:space:]]+/ {
+            path=$0; sub(/^[[:space:]]+path[[:space:]]+/, "", path); next
+        }
+        /^[[:space:]]+export[[:space:]]+/ {
+            xport=$0; sub(/^[[:space:]]+export[[:space:]]+/, "", xport); next
+        }
+        /^[[:space:]]+share[[:space:]]+/ {
+            share=$0; sub(/^[[:space:]]+share[[:space:]]+/, "", share); next
+        }
+        /^[[:space:]]+subdir[[:space:]]+/ {
+            subdir=$0; sub(/^[[:space:]]+subdir[[:space:]]+/, "", subdir); next
+        }
+        END { flush() }
+    ' "$file"
+}
+
 discover_current_mounts() {
     {
         # /etc/fstab: discover even when currently unmounted. The fstab
@@ -114,65 +185,10 @@ discover_current_mounts() {
         done < <(findmnt --fstab -rn -o TARGET,SOURCE,FSTYPE 2>/dev/null || true)
 
         # Proxmox NFS/CIFS storage definitions: discover even when unavailable.
-        #
-        # nfs: the documented `export` field is the exact path exported by
-        # the server, so `server:export` reconstructs the full source
-        # (kind=full) - the same identity a matching fstab entry would have.
-        #
-        # cifs: the documented `share` field gives the exact share name, so
-        # `//server/share` reconstructs the full source (kind=full) - but
-        # only when no `subdir` is configured. With a `subdir`, how Proxmox
-        # composes the live mount source isn't reliably known here, so the
-        # record intentionally falls back to server-only identity
-        # (kind=endpoint) rather than guessing a path that might not match.
-        if [[ -r /etc/pve/storage.cfg ]]; then
-            awk '
-                function flush() {
-                    if ((type == "nfs" || type == "cifs") && server != "") {
-                        p = path
-                        if (p == "") p = "/mnt/pve/" id
-                        if (type == "nfs" && xport != "") {
-                            src = server ":" xport
-                            kind = "full"
-                        } else if (type == "cifs" && share != "" && subdir == "") {
-                            src = "//" server "/" share
-                            kind = "full"
-                        } else {
-                            src = server
-                            kind = "endpoint"
-                        }
-                        print p "|" src "|" kind "|pve:" type ":" id
-                    }
-                }
-                /^[^[:space:]][^:]*:[[:space:]]+/ {
-                    flush()
-                    line=$0
-                    type=line; sub(/:.*/, "", type)
-                    id=line; sub(/^[^:]+:[[:space:]]*/, "", id)
-                    server=""; path=""; xport=""; share=""; subdir=""
-                    next
-                }
-                /^[[:space:]]+server[[:space:]]+/ {
-                    server=$0; sub(/^[[:space:]]+server[[:space:]]+/, "", server); next
-                }
-                /^[[:space:]]+path[[:space:]]+/ {
-                    path=$0; sub(/^[[:space:]]+path[[:space:]]+/, "", path); next
-                }
-                /^[[:space:]]+export[[:space:]]+/ {
-                    xport=$0; sub(/^[[:space:]]+export[[:space:]]+/, "", xport); next
-                }
-                /^[[:space:]]+share[[:space:]]+/ {
-                    share=$0; sub(/^[[:space:]]+share[[:space:]]+/, "", share); next
-                }
-                /^[[:space:]]+subdir[[:space:]]+/ {
-                    subdir=$0; sub(/^[[:space:]]+subdir[[:space:]]+/, "", subdir); next
-                }
-                END { flush() }
-            ' /etc/pve/storage.cfg |
-            while IFS='|' read -r target src kind origin; do
-                emit_remote_mount "$target" "$src" "$kind" "$origin"
-            done
-        fi
+        parse_storage_cfg /etc/pve/storage.cfg |
+        while IFS='|' read -r target src kind origin; do
+            emit_remote_mount "$target" "$src" "$kind" "$origin"
+        done
 
         # Custom mounts not represented above: remember them while mounted.
         # The live SOURCE is the complete remote resource (kind=full).
@@ -411,12 +427,29 @@ boot_init() {
     log "boot pending set initialized: $(wc -l < "$PENDING_FILE") CT(s)"
 }
 
+# Full-source comparison for kind=full, with one narrow, deliberate
+# exception to exact equality: Proxmox's own NFS/CIFS mount validation
+# accepts the configured source with an optional single trailing slash, so
+# this mirrors that - and only that. "//host/media" matches a live source
+# of "//host/media" or "//host/media/", but nothing broader: no other
+# normalization (case, extra slashes, subpaths, etc.) is applied.
+full_source_matches() {
+    local expected="$1"
+    local actual="$2"
+
+    [[ "$actual" == "$expected" ]] && return 0
+    [[ "$expected" != */ && "$actual" == "$expected/" ]] && return 0
+
+    return 1
+}
+
 # Readiness verification for one remembered dependency:
 #
 #   exact target mounted?
 #         | no  -> not-mounted
 #         | yes
-#   expected remote source? (full: exact match; endpoint: same server only)
+#   expected remote source? (full: exact match, optional trailing slash;
+#                             endpoint: same server only)
 #         | no  -> unexpected-source
 #         | yes
 #   bounded stat() succeeds?
@@ -441,10 +474,11 @@ mount_ready_map() {
         fi
 
         if [[ "$kind" == "full" ]]; then
-            # Exact match on the complete remote resource: a different
-            # share/export on the same server, a different server, or an
-            # unrelated local filesystem are all rejected here.
-            if [[ "$actual" != "$source" ]]; then
+            # Exact match (or the narrow trailing-slash exception above)
+            # on the complete remote resource: a different share/export on
+            # the same server, a different server, or an unrelated local
+            # filesystem are all rejected here.
+            if ! full_source_matches "$source" "$actual"; then
                 printf '%s|0|unexpected-source:%s\n' "$target" "$actual"
                 continue
             fi

@@ -13,10 +13,16 @@
   (`target|source|kind|origin`) in place of the previous `target|ip|origin`,
   so full remote-resource identity can be retained where it's known.
   Proxmox `nfs:`/`cifs:` storage.cfg entries reconstruct the full source
-  from their documented `export`/`share` fields when possible; a `cifs:`
-  entry with a `subdir` (whose resulting live source can't be reliably
-  reconstructed here) keeps the previous, weaker server-address-only
-  check.
+  from their documented `export`/`share` fields, `cifs:` including an
+  optional `subdir` (Proxmox appends it directly after the share, so
+  `//server/share/subdir` is reconstructed the same way as a plain
+  `//server/share`). Only a storage.cfg entry missing the field it needs
+  (an `nfs:` with no `export`, or a `cifs:` with no `share`) falls back to
+  the weaker server-address-only check.
+- The exact-match check accepts one narrow exception, mirroring Proxmox's
+  own NFS/CIFS mount validation: an expected source with no trailing
+  slash also matches a live source with exactly one trailing slash added.
+  Nothing broader is normalized.
 - The server-address-only check (used only where full identity genuinely
   isn't available) is now an exact match on the extracted address rather
   than a substring check, fixing a related false-positive where a shorter
@@ -25,10 +31,14 @@
 - A remembered custom mount from the previous (pre-1.1.0) database format
   is migrated automatically on first refresh after upgrading, rather than
   being silently reinterpreted or discarded.
-- Added `tests/unit.sh`, covering source-identity matching, storage.cfg
-  reconstruction, legacy database migration, and existing enrollment/
-  pending-set behavior; `tests/smoke.sh` no longer masks real
-  `systemd-analyze verify` failures.
+- The Proxmox storage.cfg parser is now a standalone function
+  (`parse_storage_cfg`) rather than inlined, so `tests/unit.sh` exercises
+  the exact production parser against fixture files instead of a
+  duplicated copy.
+- Added `tests/unit.sh`, covering source-identity matching (including the
+  trailing-slash exception), storage.cfg reconstruction, legacy database
+  migration, and existing enrollment/pending-set behavior; `tests/smoke.sh`
+  no longer masks real `systemd-analyze verify` failures.
 
 ## 1.0.0 - 2026-09-10
 

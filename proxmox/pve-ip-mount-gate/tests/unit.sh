@@ -283,6 +283,19 @@ assert_match "an unparseable mounted: record logs a WARN instead of silently van
 # 4. mount_ready_map - the core source-identity safety fix
 # ============================================================================
 
+# --- full_source_matches() directly: exact match and the narrow,
+# one-directional trailing-slash exception ---
+assert_true "full_source_matches: identical strings match" \
+    full_source_matches "//203.0.113.10/media" "//203.0.113.10/media"
+assert_true "full_source_matches: a trailing slash on the actual side is accepted" \
+    full_source_matches "//203.0.113.10/media" "//203.0.113.10/media/"
+assert_false "full_source_matches: a trailing slash on the expected side is not mirrored" \
+    full_source_matches "//203.0.113.10/media/" "//203.0.113.10/media"
+assert_false "full_source_matches: a different share does not match" \
+    full_source_matches "//203.0.113.10/media" "//203.0.113.10/backups"
+assert_false "full_source_matches: two trailing slashes do not match" \
+    full_source_matches "//203.0.113.10/media" "//203.0.113.10/media//"
+
 # --- CIFS: same server + same share -> ready candidate ---
 reset_stubs
 write_mount_db "/mnt/media|//203.0.113.10/media|full|fstab:cifs"
@@ -304,6 +317,30 @@ write_mount_db "/mnt/media|//203.0.113.10/media|full|fstab:cifs"
 FINDMNT_ACTUAL["/mnt/media"]="//203.0.113.11/media"
 run_capture mount_ready_map
 assert_match "CIFS different server is unexpected-source" \
+    "/mnt/media|0|unexpected-source" "$LAST_OUTPUT"
+
+# --- CIFS: same server + same share, different subdir -> unexpected-source ---
+reset_stubs
+write_mount_db "/mnt/media|//203.0.113.10/media/movies|full|pve:cifs:example"
+FINDMNT_ACTUAL["/mnt/media"]="//203.0.113.10/media/tv"
+run_capture mount_ready_map
+assert_match "CIFS same share + different subdir is unexpected-source" \
+    "/mnt/media|0|unexpected-source" "$LAST_OUTPUT"
+
+# --- full source: a single trailing slash on the live side is accepted ---
+reset_stubs
+write_mount_db "/mnt/media|//203.0.113.10/media|full|fstab:cifs"
+FINDMNT_ACTUAL["/mnt/media"]="//203.0.113.10/media/"
+run_capture mount_ready_map
+assert_match "expected without a trailing slash matches actual with one" \
+    "/mnt/media|1|" "$LAST_OUTPUT"
+
+# --- full source: the trailing-slash exception is narrow, not symmetric ---
+reset_stubs
+write_mount_db "/mnt/media|//203.0.113.10/media/|full|fstab:cifs"
+FINDMNT_ACTUAL["/mnt/media"]="//203.0.113.10/media"
+run_capture mount_ready_map
+assert_match "expected with a trailing slash does not match actual without one" \
     "/mnt/media|0|unexpected-source" "$LAST_OUTPUT"
 
 # --- NFS: same server + same export -> ready candidate ---
@@ -379,75 +416,57 @@ assert_match "203.0.113.24 does not match 203.0.113.241 as a substring" \
 # ============================================================================
 # 5. storage.cfg parsing: full vs. endpoint reconstruction
 # ============================================================================
+#
+# These call parse_storage_cfg() - the actual function discover_current_
+# mounts() uses in production - against a temporary fixture file, so a
+# bug in the real parser shows up here instead of being masked by a
+# duplicated copy that could quietly drift out of sync with it.
 
 STORAGE_CFG_DIR="$(mktemp -d)"
 trap 'rm -rf "$TESTROOT" "$STORAGE_CFG_DIR"' EXIT
 
-test_storage_cfg() {
-    local body="$1"
-    printf '%s\n' "$body" > "$STORAGE_CFG_DIR/storage.cfg"
-    # discover_current_mounts hardcodes /etc/pve/storage.cfg; there is no
-    # injection point, so exercise the same awk program directly against
-    # the fixture file instead of duplicating discover_current_mounts.
-    awk '
-        function flush() {
-            if ((type == "nfs" || type == "cifs") && server != "") {
-                p = path
-                if (p == "") p = "/mnt/pve/" id
-                if (type == "nfs" && xport != "") {
-                    src = server ":" xport
-                    kind = "full"
-                } else if (type == "cifs" && share != "" && subdir == "") {
-                    src = "//" server "/" share
-                    kind = "full"
-                } else {
-                    src = server
-                    kind = "endpoint"
-                }
-                print p "|" src "|" kind "|pve:" type ":" id
-            }
-        }
-        /^[^[:space:]][^:]*:[[:space:]]+/ {
-            flush()
-            line=$0
-            type=line; sub(/:.*/, "", type)
-            id=line; sub(/^[^:]+:[[:space:]]*/, "", id)
-            server=""; path=""; xport=""; share=""; subdir=""
-            next
-        }
-        /^[[:space:]]+server[[:space:]]+/ { server=$0; sub(/^[[:space:]]+server[[:space:]]+/, "", server); next }
-        /^[[:space:]]+path[[:space:]]+/   { path=$0;   sub(/^[[:space:]]+path[[:space:]]+/,   "", path);   next }
-        /^[[:space:]]+export[[:space:]]+/ { xport=$0;  sub(/^[[:space:]]+export[[:space:]]+/, "", xport); next }
-        /^[[:space:]]+share[[:space:]]+/  { share=$0;  sub(/^[[:space:]]+share[[:space:]]+/,  "", share);  next }
-        /^[[:space:]]+subdir[[:space:]]+/ { subdir=$0; sub(/^[[:space:]]+subdir[[:space:]]+/, "", subdir); next }
-        END { flush() }
-    ' "$STORAGE_CFG_DIR/storage.cfg"
+write_storage_cfg() {
+    printf '%s\n' "$1" > "$STORAGE_CFG_DIR/storage.cfg"
 }
 
-out="$(test_storage_cfg 'nfs: example-nfs
+write_storage_cfg 'nfs: example-nfs
     export /exports/media
     path /mnt/pve/example-nfs
     server 203.0.113.20
-    content backup')"
+    content backup'
 assert_eq "nfs: storage.cfg with export reconstructs a full source" \
-    "/mnt/pve/example-nfs|203.0.113.20:/exports/media|full|pve:nfs:example-nfs" "$out"
+    "/mnt/pve/example-nfs|203.0.113.20:/exports/media|full|pve:nfs:example-nfs" \
+    "$(parse_storage_cfg "$STORAGE_CFG_DIR/storage.cfg")"
 
-out="$(test_storage_cfg 'cifs: example-cifs
+write_storage_cfg 'cifs: example-cifs
     path /mnt/pve/example-cifs
     server 203.0.113.10
     share media
-    content backup')"
-assert_eq "cifs: storage.cfg with share (no subdir) reconstructs a full source" \
-    "/mnt/pve/example-cifs|//203.0.113.10/media|full|pve:cifs:example-cifs" "$out"
+    content backup'
+assert_eq "cifs: storage.cfg with share only reconstructs a full source" \
+    "/mnt/pve/example-cifs|//203.0.113.10/media|full|pve:cifs:example-cifs" \
+    "$(parse_storage_cfg "$STORAGE_CFG_DIR/storage.cfg")"
 
-out="$(test_storage_cfg 'cifs: example-cifs-sub
+write_storage_cfg 'cifs: example-cifs-sub
     path /mnt/pve/example-cifs-sub
     server 203.0.113.10
     share media
     subdir /movies
-    content backup')"
-assert_eq "cifs: storage.cfg with a subdir falls back to endpoint-only identity" \
-    "/mnt/pve/example-cifs-sub|203.0.113.10|endpoint|pve:cifs:example-cifs-sub" "$out"
+    content backup'
+assert_eq "cifs: storage.cfg with share + subdir reconstructs a full source including the subdir" \
+    "/mnt/pve/example-cifs-sub|//203.0.113.10/media/movies|full|pve:cifs:example-cifs-sub" \
+    "$(parse_storage_cfg "$STORAGE_CFG_DIR/storage.cfg")"
+
+write_storage_cfg 'cifs: example-cifs-noshare
+    path /mnt/pve/example-cifs-noshare
+    server 203.0.113.10
+    content backup'
+assert_eq "cifs: storage.cfg missing share falls back to endpoint-only identity" \
+    "/mnt/pve/example-cifs-noshare|203.0.113.10|endpoint|pve:cifs:example-cifs-noshare" \
+    "$(parse_storage_cfg "$STORAGE_CFG_DIR/storage.cfg")"
+
+assert_eq "parse_storage_cfg prints nothing for a missing file" \
+    "" "$(parse_storage_cfg "$STORAGE_CFG_DIR/does-not-exist.cfg")"
 
 # ============================================================================
 # 6. ct_external_deps - bind-mount dependency resolution

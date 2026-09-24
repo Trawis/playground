@@ -126,33 +126,47 @@ For example, with `/mnt/pve/media` expected to be `//203.0.113.10/media`:
 ```text
 expected: //203.0.113.10/media
 actual:   //203.0.113.10/media      -> OK, continues to the responsiveness check
+actual:   //203.0.113.10/media/     -> OK (see "the trailing-slash exception" below)
 actual:   //203.0.113.10/backups    -> unexpected-source (same server, different share)
 actual:   //203.0.113.11/media      -> unexpected-source (different server)
 actual:   /dev/sdb1                 -> unexpected-source (unrelated local filesystem)
 ```
 
 The same applies to NFS exports, e.g. `203.0.113.20:/exports/media` vs.
-`203.0.113.20:/exports/backups`.
+`203.0.113.20:/exports/backups`, and to a CIFS share's `subdir`, e.g.
+`//203.0.113.10/media/movies` vs. `//203.0.113.10/media/tv`.
+
+### The trailing-slash exception
+
+The exact-match check has exactly one deliberately narrow exception,
+mirroring Proxmox's own NFS/CIFS mount validation: an expected source with
+no trailing slash also matches a live source with exactly one trailing
+slash added (`//203.0.113.10/media` matches `//203.0.113.10/media/`, but
+nothing broader - not two trailing slashes, not the reverse direction, and
+no other normalization of case, path segments, etc.).
 
 ### Where the exact source comes from
 
 - **`/etc/fstab` entries** and **live/custom-discovered mounts**: the
   configured or live `SOURCE` *is* the complete remote resource, so these
-  always get the strong, exact-match check above.
+  always get the exact-match check above.
 - **Proxmox `nfs:` storage.cfg entries**: the documented `export` field
   gives the exact NFS export path, so `server:export` is reconstructed and
   gets the same exact-match check.
 - **Proxmox `cifs:` storage.cfg entries**: the documented `share` field
-  gives the exact share name, so `//server/share` is reconstructed and
-  gets the exact-match check - but only when no `subdir` is configured.
-  With a `subdir` set, how Proxmox composes the resulting live mount
-  source isn't something this project can reliably reconstruct from the
-  config alone, so that entry deliberately falls back to a **weaker,
-  server-address-only** check instead of guessing a path that might not
-  match. This is the one case where this project cannot guarantee full
-  remote-resource identity; it's still an improvement over versions before
-  this check existed (which used a loose substring match that a shorter
-  address could pass by matching part of a longer one).
+  gives the exact share name, and Proxmox's own CIFS mount source
+  construction appends an optional `subdir` directly after it, so
+  `//server/share` (or `//server/share/subdir`, when a `subdir` is
+  configured) is reconstructed and gets the same exact-match check,
+  whether or not a `subdir` is set.
+- A storage.cfg entry that's missing the field it needs to reconstruct the
+  exact resource (an `nfs:` entry with no `export`, or a `cifs:` entry
+  with no `share`) falls back to a **weaker, server-address-only** check
+  instead of guessing. This is the only case where this project cannot
+  guarantee full remote-resource identity from a storage.cfg entry; it's
+  still an improvement over versions before this check existed (which
+  used a loose substring match that a shorter address could pass by
+  matching part of a longer one).
 - **Legacy remembered custom mounts** from before this version's mount
   database format are migrated to the same weaker, server-address-only
   check on upgrade (see [Custom mounts](#custom-mounts)), and are
