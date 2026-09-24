@@ -16,7 +16,7 @@ It is designed for the case where mount management already exists. **This projec
   - adds the Proxmox tag `ipmount-gated`
   - changes its normal `onboot` setting to `0`
 - At boot, builds a pending set of gated LXCs **before `pve-guests.service`**.
-- Every 60 seconds, starts a pending LXC only when **all** IP-backed mounts used by that LXC are present and responsive.
+- Every 60 seconds, starts a pending LXC only when **all** IP-backed mounts used by that LXC are present, mounted from the *exact* expected remote resource, and responsive.
 - Does not restart a CT that you manually stop after it has successfully started that boot.
 - Auto-discovers new shares and auto-enrolls new `onboot=1` dependent LXCs. Newly-created/enrolled CTs are scheduled for the **next boot** by default; use `--start-now CTID` if you explicitly want one started during the current boot.
 
@@ -91,6 +91,78 @@ Result:
 - CT 105 starts only when **both** `/mnt/pve/media` and `/mnt/pve/downloads` are ready.
 - `/mnt/local-ssd` does not participate because it is local.
 
+## Mount source verification
+
+**Same server does not mean same remote resource.** Two different shares or
+exports on the same NAS are two different dependencies, and a mount gone
+wrong (an operator error, a misconfigured storage definition, an unrelated
+filesystem left mounted over a target) must never be accepted just because
+it happens to live on the right server.
+
+So the readiness check is, in order:
+
+```text
+exact target mounted?
+       |
+       yes
+       |
+mounted from the exact expected remote source?
+       |
+       yes
+       |
+bounded stat() responds in time?
+       |
+       yes
+       |
+READY
+```
+
+A source mismatch is reported and the dependency stays **not ready** - it
+never falls through to the responsiveness check, so an unexpected
+filesystem that happens to answer `stat()` quickly is still rejected.
+
+For example, with `/mnt/pve/media` expected to be `//203.0.113.10/media`:
+
+```text
+expected: //203.0.113.10/media
+actual:   //203.0.113.10/media      -> OK, continues to the responsiveness check
+actual:   //203.0.113.10/backups    -> unexpected-source (same server, different share)
+actual:   //203.0.113.11/media      -> unexpected-source (different server)
+actual:   /dev/sdb1                 -> unexpected-source (unrelated local filesystem)
+```
+
+The same applies to NFS exports, e.g. `203.0.113.20:/exports/media` vs.
+`203.0.113.20:/exports/backups`.
+
+### Where the exact source comes from
+
+- **`/etc/fstab` entries** and **live/custom-discovered mounts**: the
+  configured or live `SOURCE` *is* the complete remote resource, so these
+  always get the strong, exact-match check above.
+- **Proxmox `nfs:` storage.cfg entries**: the documented `export` field
+  gives the exact NFS export path, so `server:export` is reconstructed and
+  gets the same exact-match check.
+- **Proxmox `cifs:` storage.cfg entries**: the documented `share` field
+  gives the exact share name, so `//server/share` is reconstructed and
+  gets the exact-match check - but only when no `subdir` is configured.
+  With a `subdir` set, how Proxmox composes the resulting live mount
+  source isn't something this project can reliably reconstruct from the
+  config alone, so that entry deliberately falls back to a **weaker,
+  server-address-only** check instead of guessing a path that might not
+  match. This is the one case where this project cannot guarantee full
+  remote-resource identity; it's still an improvement over versions before
+  this check existed (which used a loose substring match that a shorter
+  address could pass by matching part of a longer one).
+- **Legacy remembered custom mounts** from before this version's mount
+  database format are migrated to the same weaker, server-address-only
+  check on upgrade (see [Custom mounts](#custom-mounts)), and are
+  automatically strengthened to the exact-match check the next time that
+  mount is seen live.
+
+Either way, the server-address-only check is always an **exact match on
+the extracted address**, never a substring check - so `203.0.113.24` can
+never be mistaken for `203.0.113.241`.
+
 ## New LXCs and new shares
 
 No reinstall is required.
@@ -118,7 +190,11 @@ A custom mount that is only visible through the live mount table is remembered i
 /etc/pve-ip-mount-gate/mounts.db
 ```
 
-This is intentionally conservative: if that remote filesystem later disappears, the gate remembers that the path was external rather than accidentally treating the underlying empty local directory as safe.
+This is intentionally conservative: if that remote filesystem later disappears, the gate remembers that the path was external rather than accidentally treating the underlying empty local directory as safe. Because the live source was seen directly, a remembered custom mount always gets the strong, exact-match verification described in [Mount source verification](#mount-source-verification).
+
+Each line is `target|source|kind|origin` - see [Mount source verification](#mount-source-verification) for what `source`/`kind` mean. Configured (`/etc/fstab`/`storage.cfg`) entries are always rediscovered fresh and never need migrating; only remembered custom (`mounted:`-origin) entries persist across a refresh.
+
+**Upgrading from a version before this format:** the previous database format only remembered a target and a bare IP address, with no share/export identity. On first refresh after upgrading, any such remembered custom mount is migrated automatically to the current format's weaker, server-address-only check (never discarded) and logged as migrated; it's strengthened to the full exact-match check automatically the next time that mount is seen live. Configured fstab/storage.cfg entries need no migration since they're rediscovered fresh regardless of format.
 
 If a custom remote mount has been permanently removed, forget it explicitly:
 
@@ -160,8 +236,9 @@ Persistent state is deliberately left under `/etc/pve-ip-mount-gate` for audit/r
 
 - This version intentionally matches **IPv4-address-backed** shares only. Hostname-only NFS/CIFS sources are ignored.
 - LXC dependency detection is for bind-style `mpX` entries whose source is an absolute host path, e.g. `mp0: /mnt/pve/media,mp=/media`.
-- The health check confirms the exact mountpoint exists, its source still contains the remembered/configured IP, and a small `stat()` against the mount root completes before the timeout.
+- The health check confirms the exact mountpoint exists, its live source matches the exact expected remote resource (or, in the narrower cases described in [Mount source verification](#mount-source-verification), at least the expected server address), and a small `stat()` against the mount root completes before the timeout.
 - A mounted filesystem can still fail later at runtime. This project gates **startup**; it does not stop running containers when storage disappears.
+- This project only verifies mounts; it never retries a failed one. If a dependency shows `not-mounted` or `unexpected-source`, recovering the mount itself (or investigating why something else is occupying the target) is outside this project's scope - see `pve-ip-mount-retry` for automatic retry of missing `/etc/fstab`-defined mounts.
 - Install it on every Proxmox node where a gated LXC may live. The `ipmount-gated` tag follows guest configuration, while mount inventory is node-local.
 - A CT created with `onboot=1` and immediately followed by a host reboot before the periodic auto-enrollment has ever run is an edge case. The enabled boot enrollment service is ordered before `pve-guests.service` so it can catch that CT and clear `onboot` before Proxmox's normal guest autostart path.
 

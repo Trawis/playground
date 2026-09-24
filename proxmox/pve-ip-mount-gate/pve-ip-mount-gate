@@ -43,13 +43,49 @@ extract_ip() {
     grep -Eo "$IP_RE" <<<"$1" | head -n1
 }
 
+# findmnt --raw escapes whitespace and other separator-sensitive bytes as
+# \xNN; decode that consistently everywhere a raw findmnt field is read; so
+# that exact-string source comparisons downstream (see mount_ready_map)
+# aren't defeated by escaping differences.
+decode_findmnt_field() {
+    printf '%b' "$1"
+}
+
+# Mount database record format (pipe-separated, 4 fields):
+#
+#   target | source | kind | origin
+#
+# target  - the local mountpoint.
+# source  - the expected remote resource identity. Its meaning depends on
+#           kind (below).
+# kind    - "full": source is the complete remote resource (as it would
+#             appear as SOURCE in /proc/mounts, e.g. //203.0.113.10/media
+#             or 203.0.113.20:/exports/media). An already-mounted target
+#             is only accepted if its live source matches this exactly.
+#           "endpoint": source is just the server address. This is a
+#             deliberately weaker identity, used only when the complete
+#             remote resource genuinely couldn't be determined (some
+#             Proxmox storage.cfg shapes - see README) or when carrying
+#             forward a record from the previous (pre-4-field) schema
+#             during upgrade. An already-mounted target is accepted if its
+#             live source's server address matches - same as this
+#             project's original behavior, but as an exact match on the
+#             extracted address rather than a substring check.
+# origin  - free-text provenance for diagnostics/status (e.g.
+#           "fstab:nfs4", "pve:cifs:mystorage", "mounted:cifs").
+#
+# fstab and live/custom discovery always know the complete source, so they
+# always emit kind=full. Proxmox storage.cfg entries emit kind=full only
+# when the config gives enough to reconstruct the exact remote resource
+# (see the storage.cfg parser below); otherwise kind=endpoint.
 emit_remote_mount() {
     local target="$1"
     local source="$2"
-    local origin="$3"
+    local kind="$3"
+    local origin="$4"
     local ip
 
-    [[ -n "$target" && -n "$source" ]] || return 0
+    [[ -n "$target" && -n "$source" && -n "$kind" ]] || return 0
 
     ip="$(extract_ip "$source" || true)"
     [[ -n "$ip" ]] || return 0
@@ -62,25 +98,50 @@ emit_remote_mount() {
     target="${target%/}"
     [[ -n "$target" ]] || target="/"
 
-    printf '%s|%s|%s\n' "$target" "$ip" "$origin"
+    printf '%s|%s|%s|%s\n' "$target" "$source" "$kind" "$origin"
 }
 
 discover_current_mounts() {
     {
-        # /etc/fstab: discover even when currently unmounted.
+        # /etc/fstab: discover even when currently unmounted. The fstab
+        # SOURCE is itself the complete remote resource, so this is
+        # always a full-identity record.
         while read -r target source fstype; do
             [[ -n "${target:-}" ]] || continue
-            emit_remote_mount "$target" "$source" "fstab:${fstype:-unknown}"
+            target="$(decode_findmnt_field "$target")"
+            source="$(decode_findmnt_field "$source")"
+            emit_remote_mount "$target" "$source" "full" "fstab:${fstype:-unknown}"
         done < <(findmnt --fstab -rn -o TARGET,SOURCE,FSTYPE 2>/dev/null || true)
 
         # Proxmox NFS/CIFS storage definitions: discover even when unavailable.
+        #
+        # nfs: the documented `export` field is the exact path exported by
+        # the server, so `server:export` reconstructs the full source
+        # (kind=full) - the same identity a matching fstab entry would have.
+        #
+        # cifs: the documented `share` field gives the exact share name, so
+        # `//server/share` reconstructs the full source (kind=full) - but
+        # only when no `subdir` is configured. With a `subdir`, how Proxmox
+        # composes the live mount source isn't reliably known here, so the
+        # record intentionally falls back to server-only identity
+        # (kind=endpoint) rather than guessing a path that might not match.
         if [[ -r /etc/pve/storage.cfg ]]; then
             awk '
                 function flush() {
                     if ((type == "nfs" || type == "cifs") && server != "") {
                         p = path
                         if (p == "") p = "/mnt/pve/" id
-                        print p "|" server "|pve:" type ":" id
+                        if (type == "nfs" && xport != "") {
+                            src = server ":" xport
+                            kind = "full"
+                        } else if (type == "cifs" && share != "" && subdir == "") {
+                            src = "//" server "/" share
+                            kind = "full"
+                        } else {
+                            src = server
+                            kind = "endpoint"
+                        }
+                        print p "|" src "|" kind "|pve:" type ":" id
                     }
                 }
                 /^[^[:space:]][^:]*:[[:space:]]+/ {
@@ -88,7 +149,7 @@ discover_current_mounts() {
                     line=$0
                     type=line; sub(/:.*/, "", type)
                     id=line; sub(/^[^:]+:[[:space:]]*/, "", id)
-                    server=""; path=""
+                    server=""; path=""; xport=""; share=""; subdir=""
                     next
                 }
                 /^[[:space:]]+server[[:space:]]+/ {
@@ -97,23 +158,72 @@ discover_current_mounts() {
                 /^[[:space:]]+path[[:space:]]+/ {
                     path=$0; sub(/^[[:space:]]+path[[:space:]]+/, "", path); next
                 }
+                /^[[:space:]]+export[[:space:]]+/ {
+                    xport=$0; sub(/^[[:space:]]+export[[:space:]]+/, "", xport); next
+                }
+                /^[[:space:]]+share[[:space:]]+/ {
+                    share=$0; sub(/^[[:space:]]+share[[:space:]]+/, "", share); next
+                }
+                /^[[:space:]]+subdir[[:space:]]+/ {
+                    subdir=$0; sub(/^[[:space:]]+subdir[[:space:]]+/, "", subdir); next
+                }
                 END { flush() }
             ' /etc/pve/storage.cfg |
-            while IFS='|' read -r target server origin; do
-                emit_remote_mount "$target" "$server" "$origin"
+            while IFS='|' read -r target src kind origin; do
+                emit_remote_mount "$target" "$src" "$kind" "$origin"
             done
         fi
 
         # Custom mounts not represented above: remember them while mounted.
+        # The live SOURCE is the complete remote resource (kind=full).
         while read -r target source fstype; do
             [[ -n "${target:-}" ]] || continue
-            emit_remote_mount "$target" "$source" "mounted:${fstype:-unknown}"
+            target="$(decode_findmnt_field "$target")"
+            source="$(decode_findmnt_field "$source")"
+            emit_remote_mount "$target" "$source" "full" "mounted:${fstype:-unknown}"
         done < <(findmnt -rn -o TARGET,SOURCE,FSTYPE 2>/dev/null || true)
-    } | awk -F'|' 'NF >= 2 && !seen[$1]++'
+    } | awk -F'|' 'NF >= 4 && !seen[$1]++'
+}
+
+# Re-emit a previously-persisted "mounted:"-origin (custom) record for the
+# next MOUNT_DB, translating it forward if it's in the legacy 3-field
+# schema (target|ip|origin) used before this version. A legacy record is
+# migrated to kind=endpoint using its remembered IP: that keeps a
+# currently-unavailable custom mount from being silently forgotten across
+# the upgrade, without pretending the old schema ever recorded a complete
+# share/export identity it didn't. Once that mount is next seen live,
+# discover_current_mounts() replaces it with a full-identity record.
+#
+# Configured (fstab:/pve:) origin records are intentionally NOT carried
+# forward here, in either schema - discover_current_mounts() regenerates
+# them fresh on every refresh, so nothing is lost by dropping stale copies.
+carry_forward_custom_record() {
+    local rec="$1"
+    local f1 f2 f3 f4
+
+    IFS='|' read -r f1 f2 f3 f4 <<<"$rec"
+    [[ -n "$f1" ]] || return 0
+
+    if [[ "$f3" == "full" || "$f3" == "endpoint" ]]; then
+        # Current schema already.
+        [[ "$f4" == mounted:* ]] && printf '%s\n' "$rec"
+        return 0
+    fi
+
+    if [[ -n "$f2" && "$f3" == mounted:* && -z "$f4" ]]; then
+        # Legacy schema: target|ip|origin.
+        log "migrating legacy mount record for $f1 (origin $f3) to endpoint-only identity; the previous schema did not record an exact share/export"
+        printf '%s|%s|endpoint|%s\n' "$f1" "$f2" "$f3"
+        return 0
+    fi
+
+    if [[ "$rec" == *"mounted:"* ]]; then
+        log "WARN: could not parse remembered custom mount record for $f1, discarding: $rec"
+    fi
 }
 
 refresh_mount_db() {
-    local tmp
+    local tmp rec
     ensure_runtime
     tmp="$(mktemp)"
 
@@ -122,8 +232,11 @@ refresh_mount_db() {
     {
         # Current configuration/live state wins if a custom mount changes source.
         discover_current_mounts
-        awk -F'|' '$3 ~ /^mounted:/ {print}' "$MOUNT_DB" 2>/dev/null || true
-    } | awk -F'|' 'NF >= 2 && !seen[$1]++' > "$tmp"
+        while IFS= read -r rec; do
+            [[ -n "$rec" ]] || continue
+            carry_forward_custom_record "$rec"
+        done < "$MOUNT_DB"
+    } | awk -F'|' 'NF >= 4 && !seen[$1]++' > "$tmp"
 
     mv "$tmp" "$MOUNT_DB"
 }
@@ -212,7 +325,7 @@ path_matches_target() {
 
 ct_external_deps() {
     local ctid="$1"
-    local src rec target ip origin best best_len
+    local src rec target source kind origin best best_len
     local -a mounts=()
 
     mapfile -t mounts < <(cat "$MOUNT_DB" 2>/dev/null || true)
@@ -224,7 +337,7 @@ ct_external_deps() {
         best_len=0
 
         for rec in "${mounts[@]}"; do
-            IFS='|' read -r target ip origin <<<"$rec"
+            IFS='|' read -r target source kind origin <<<"$rec"
             [[ -n "$target" ]] || continue
 
             if path_matches_target "$src" "$target" && (( ${#target} > best_len )); then
@@ -298,21 +411,53 @@ boot_init() {
     log "boot pending set initialized: $(wc -l < "$PENDING_FILE") CT(s)"
 }
 
+# Readiness verification for one remembered dependency:
+#
+#   exact target mounted?
+#         | no  -> not-mounted
+#         | yes
+#   expected remote source? (full: exact match; endpoint: same server only)
+#         | no  -> unexpected-source
+#         | yes
+#   bounded stat() succeeds?
+#         | no  -> not-responding
+#         | yes
+#   READY
+#
+# A source mismatch never falls through to the responsiveness check: an
+# unexpected filesystem occupying the target must never be treated as
+# ready just because it happens to answer stat() quickly.
 mount_ready_map() {
-    local rec target ip origin actual
+    local rec target source kind origin actual actual_ip
 
-    while IFS='|' read -r target ip origin; do
+    while IFS='|' read -r target source kind origin; do
         [[ -n "$target" ]] || continue
-        actual="$(findmnt -rn -M "$target" -o SOURCE 2>/dev/null || true)"
+        actual="$(findmnt -rn -M "$target" -o SOURCE --raw 2>/dev/null || true)"
+        actual="$(decode_findmnt_field "$actual")"
 
         if [[ -z "$actual" ]]; then
             printf '%s|0|not-mounted\n' "$target"
             continue
         fi
 
-        if [[ "$actual" != *"$ip"* ]]; then
-            printf '%s|0|unexpected-source:%s\n' "$target" "$actual"
-            continue
+        if [[ "$kind" == "full" ]]; then
+            # Exact match on the complete remote resource: a different
+            # share/export on the same server, a different server, or an
+            # unrelated local filesystem are all rejected here.
+            if [[ "$actual" != "$source" ]]; then
+                printf '%s|0|unexpected-source:%s\n' "$target" "$actual"
+                continue
+            fi
+        else
+            # endpoint-only identity: the strongest check available is
+            # "same server address", done as an exact match on the
+            # extracted address - never a substring check, which could
+            # otherwise mistake e.g. 203.0.113.24 for 203.0.113.241.
+            actual_ip="$(extract_ip "$actual" || true)"
+            if [[ -z "$actual_ip" || "$actual_ip" != "$source" ]]; then
+                printf '%s|0|unexpected-source:%s\n' "$target" "$actual"
+                continue
+            fi
         fi
 
         if ! timeout -k 2s "${IO_TIMEOUT}s" stat -- "$target" >/dev/null 2>&1; then
@@ -475,9 +620,10 @@ status_cmd() {
 
     echo "Configured tag: $GATE_TAG"
     echo
-    echo "Known IP-backed mounts:"
+    echo "Known IP-backed mounts (TARGET / SOURCE / KIND / ORIGIN):"
     if [[ -s "$MOUNT_DB" ]]; then
-        column -t -s'|' "$MOUNT_DB" 2>/dev/null || cat "$MOUNT_DB"
+        { printf 'TARGET|SOURCE|KIND|ORIGIN\n'; cat "$MOUNT_DB"; } |
+            column -t -s'|' 2>/dev/null || cat "$MOUNT_DB"
     else
         echo "  (none)"
     fi
@@ -519,44 +665,51 @@ Commands:
 EOF_USAGE
 }
 
-case "${1:-}" in
-    --discover)
-        require_root
-        acquire_lock
-        effective_mounts
-        ;;
-    --enroll)
-        require_root
-        acquire_lock
-        enroll_new_cts
-        ;;
-    --boot-init)
-        boot_init
-        ;;
-    --cycle)
-        cycle
-        ;;
-    --start-now)
-        [[ $# -eq 2 ]] || { usage; exit 2; }
-        start_now "$2"
-        ;;
-    --unenroll)
-        [[ $# -eq 2 ]] || { usage; exit 2; }
-        unenroll_ct "$2" 0
-        ;;
-    --unenroll-onboot)
-        [[ $# -eq 2 ]] || { usage; exit 2; }
-        unenroll_ct "$2" 1
-        ;;
-    --forget-mount)
-        [[ $# -eq 2 ]] || { usage; exit 2; }
-        forget_mount "$2"
-        ;;
-    --status)
-        status_cmd
-        ;;
-    *)
-        usage
-        exit 2
-        ;;
-esac
+main() {
+    case "${1:-}" in
+        --discover)
+            require_root
+            acquire_lock
+            effective_mounts
+            ;;
+        --enroll)
+            require_root
+            acquire_lock
+            enroll_new_cts
+            ;;
+        --boot-init)
+            boot_init
+            ;;
+        --cycle)
+            cycle
+            ;;
+        --start-now)
+            [[ $# -eq 2 ]] || { usage; exit 2; }
+            start_now "$2"
+            ;;
+        --unenroll)
+            [[ $# -eq 2 ]] || { usage; exit 2; }
+            unenroll_ct "$2" 0
+            ;;
+        --unenroll-onboot)
+            [[ $# -eq 2 ]] || { usage; exit 2; }
+            unenroll_ct "$2" 1
+            ;;
+        --forget-mount)
+            [[ $# -eq 2 ]] || { usage; exit 2; }
+            forget_mount "$2"
+            ;;
+        --status)
+            status_cmd
+            ;;
+        *)
+            usage
+            exit 2
+            ;;
+    esac
+}
+
+# Allow this file to be sourced (by the test suite) without running main.
+if [[ "${BASH_SOURCE[0]:-$0}" == "${0}" ]]; then
+    main "$@"
+fi
