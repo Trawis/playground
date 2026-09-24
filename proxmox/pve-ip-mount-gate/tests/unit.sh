@@ -216,6 +216,20 @@ run_capture() {
     rm -f "$tmp"
 }
 
+# Same as run_capture, but keeps stdout and stderr separate (into
+# $LAST_STDOUT/$LAST_STDERR) - used where it matters that diagnostics
+# never leak into a function's data stream (e.g. carry_forward_custom_
+# record's stdout is read as mounts.db records by its caller).
+run_capture_split() {
+    local tmp_out tmp_err
+    tmp_out="$(mktemp)"
+    tmp_err="$(mktemp)"
+    "$@" >"$tmp_out" 2>"$tmp_err"
+    LAST_STDOUT="$(cat "$tmp_out")"
+    LAST_STDERR="$(cat "$tmp_err")"
+    rm -f "$tmp_out" "$tmp_err"
+}
+
 write_mount_db() {
     # write_mount_db "line1" "line2" ...
     mkdir -p "$STATE_DIR"
@@ -266,34 +280,60 @@ assert_eq "a current-schema mounted: record passes through unchanged" \
 assert_eq "a current-schema fstab: record is not carried forward (rediscovered fresh)" \
     "" "$(carry_forward_custom_record "/mnt/media|//203.0.113.10/media|full|fstab:cifs")"
 
-run_capture carry_forward_custom_record "/mnt/legacy|203.0.113.40|mounted:cifs"
-assert_match "a legacy 3-field mounted: record is migrated to endpoint kind" \
-    "/mnt/legacy|203.0.113.40|endpoint|mounted:cifs" "$LAST_OUTPUT"
-assert_match "the migration is logged" "migrating legacy mount record" "$LAST_OUTPUT"
+# carry_forward_custom_record's stdout is consumed as mounts.db records by
+# its caller, so its own diagnostics must go to stderr - never mixed into
+# stdout, where they'd be piped into the database as if they were data.
+run_capture_split carry_forward_custom_record "/mnt/legacy|203.0.113.40|mounted:cifs"
+assert_eq "a legacy 3-field mounted: record is migrated to endpoint kind (stdout only)" \
+    "/mnt/legacy|203.0.113.40|endpoint|mounted:cifs" "$LAST_STDOUT"
+assert_match "the migration is logged on stderr" "migrating legacy mount record" "$LAST_STDERR"
 
 reset_stubs
 assert_eq "a legacy 3-field fstab-origin record is dropped, not migrated" \
     "" "$(carry_forward_custom_record "/mnt/media|203.0.113.10|fstab:nfs")"
 
-run_capture carry_forward_custom_record "/mnt/weird|garbage|mounted:cifs|extra|fields"
-assert_match "an unparseable mounted: record logs a WARN instead of silently vanishing" \
-    "WARN:" "$LAST_OUTPUT"
+run_capture_split carry_forward_custom_record "/mnt/weird|garbage|mounted:cifs|extra|fields"
+assert_eq "an unparseable mounted: record prints nothing on stdout" "" "$LAST_STDOUT"
+assert_match "an unparseable mounted: record logs a WARN on stderr instead of silently vanishing" \
+    "WARN:" "$LAST_STDERR"
+
+# --- the same migration, end-to-end through refresh_mount_db(), which is
+# how this actually runs in production (carry_forward_custom_record is
+# called from inside the pipeline that rebuilds MOUNT_DB) ---
+reset_stubs
+reset_runtime_dirs
+ensure_runtime
+write_mount_db "/mnt/legacy|203.0.113.41|mounted:nfs4"
+run_capture_split refresh_mount_db
+assert_eq "refresh_mount_db migrates a legacy record into mounts.db" \
+    "/mnt/legacy|203.0.113.41|endpoint|mounted:nfs4" "$(cat "$MOUNT_DB")"
+assert_match "the migration diagnostic is externally visible on stderr" \
+    "migrating legacy mount record" "$LAST_STDERR"
+if grep -qF "migrating legacy mount record" "$MOUNT_DB"; then
+    bad "the migration diagnostic is not written into mounts.db"
+else
+    ok "the migration diagnostic is not written into mounts.db"
+fi
 
 # ============================================================================
 # 4. mount_ready_map - the core source-identity safety fix
 # ============================================================================
 
-# --- full_source_matches() directly: exact match and the narrow,
-# one-directional trailing-slash exception ---
+# --- full_source_matches() directly: mirrors Proxmox's `^expected/?$`
+# validation - the live source may equal the expected source with one
+# additional trailing slash appended, regardless of whether expected
+# itself already ends in a slash. ---
 assert_true "full_source_matches: identical strings match" \
     full_source_matches "//203.0.113.10/media" "//203.0.113.10/media"
-assert_true "full_source_matches: a trailing slash on the actual side is accepted" \
+assert_true "full_source_matches: one trailing slash appended to expected is accepted" \
     full_source_matches "//203.0.113.10/media" "//203.0.113.10/media/"
-assert_false "full_source_matches: a trailing slash on the expected side is not mirrored" \
+assert_true "full_source_matches: one trailing slash appended even when expected already ends in one" \
+    full_source_matches "203.0.113.20:/" "203.0.113.20://"
+assert_false "full_source_matches: an expected trailing slash is never dropped from actual" \
     full_source_matches "//203.0.113.10/media/" "//203.0.113.10/media"
 assert_false "full_source_matches: a different share does not match" \
     full_source_matches "//203.0.113.10/media" "//203.0.113.10/backups"
-assert_false "full_source_matches: two trailing slashes do not match" \
+assert_false "full_source_matches: two trailing slashes appended do not match" \
     full_source_matches "//203.0.113.10/media" "//203.0.113.10/media//"
 
 # --- CIFS: same server + same share -> ready candidate ---
@@ -327,20 +367,30 @@ run_capture mount_ready_map
 assert_match "CIFS same share + different subdir is unexpected-source" \
     "/mnt/media|0|unexpected-source" "$LAST_OUTPUT"
 
-# --- full source: a single trailing slash on the live side is accepted ---
+# --- full source: one trailing slash appended on the live side is accepted ---
 reset_stubs
 write_mount_db "/mnt/media|//203.0.113.10/media|full|fstab:cifs"
 FINDMNT_ACTUAL["/mnt/media"]="//203.0.113.10/media/"
 run_capture mount_ready_map
-assert_match "expected without a trailing slash matches actual with one" \
+assert_match "expected without a trailing slash matches actual with one appended" \
     "/mnt/media|1|" "$LAST_OUTPUT"
 
-# --- full source: the trailing-slash exception is narrow, not symmetric ---
+# --- full source: still matches with one slash appended even when expected
+# already ends in a slash (an NFS root export, e.g. "server:/") ---
+reset_stubs
+write_mount_db "/mnt/root|203.0.113.20:/|full|fstab:nfs4"
+FINDMNT_ACTUAL["/mnt/root"]="203.0.113.20://"
+run_capture mount_ready_map
+assert_match "one trailing slash appended matches even when expected already ends in one" \
+    "/mnt/root|1|" "$LAST_OUTPUT"
+
+# --- full source: a trailing slash already in expected is never dropped
+# from actual - the exception only ever appends a slash, never removes one ---
 reset_stubs
 write_mount_db "/mnt/media|//203.0.113.10/media/|full|fstab:cifs"
 FINDMNT_ACTUAL["/mnt/media"]="//203.0.113.10/media"
 run_capture mount_ready_map
-assert_match "expected with a trailing slash does not match actual without one" \
+assert_match "an expected trailing slash is not dropped from actual" \
     "/mnt/media|0|unexpected-source" "$LAST_OUTPUT"
 
 # --- NFS: same server + same export -> ready candidate ---
@@ -463,6 +513,14 @@ write_storage_cfg 'cifs: example-cifs-noshare
     content backup'
 assert_eq "cifs: storage.cfg missing share falls back to endpoint-only identity" \
     "/mnt/pve/example-cifs-noshare|203.0.113.10|endpoint|pve:cifs:example-cifs-noshare" \
+    "$(parse_storage_cfg "$STORAGE_CFG_DIR/storage.cfg")"
+
+write_storage_cfg 'nfs: example-nfs-noexport
+    path /mnt/pve/example-nfs-noexport
+    server 203.0.113.20
+    content backup'
+assert_eq "nfs: storage.cfg missing export falls back to endpoint-only identity" \
+    "/mnt/pve/example-nfs-noexport|203.0.113.20|endpoint|pve:nfs:example-nfs-noexport" \
     "$(parse_storage_cfg "$STORAGE_CFG_DIR/storage.cfg")"
 
 assert_eq "parse_storage_cfg prints nothing for a missing file" \

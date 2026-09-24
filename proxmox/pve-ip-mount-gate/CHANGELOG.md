@@ -20,9 +20,10 @@
   (an `nfs:` with no `export`, or a `cifs:` with no `share`) falls back to
   the weaker server-address-only check.
 - The exact-match check accepts one narrow exception, mirroring Proxmox's
-  own NFS/CIFS mount validation: an expected source with no trailing
-  slash also matches a live source with exactly one trailing slash added.
-  Nothing broader is normalized.
+  own NFS/CIFS source validation (effectively `^expected/?$`): the live
+  source may equal the expected source with one additional trailing `/`
+  appended, regardless of whether the expected source already ends in
+  one. Nothing broader is normalized.
 - The server-address-only check (used only where full identity genuinely
   isn't available) is now an exact match on the extracted address rather
   than a substring check, fixing a related false-positive where a shorter
@@ -30,15 +31,21 @@
   `203.0.113.24` no longer matches `203.0.113.241`).
 - A remembered custom mount from the previous (pre-1.1.0) database format
   is migrated automatically on first refresh after upgrading, rather than
-  being silently reinterpreted or discarded.
+  being silently reinterpreted or discarded. The migration/warning
+  diagnostics this logs now go to stderr, since the same function's
+  stdout is read as mounts.db records by its caller - they no longer risk
+  being piped into the database as if they were data, and are visible in
+  the service journal.
 - The Proxmox storage.cfg parser is now a standalone function
   (`parse_storage_cfg`) rather than inlined, so `tests/unit.sh` exercises
   the exact production parser against fixture files instead of a
   duplicated copy.
 - Added `tests/unit.sh`, covering source-identity matching (including the
   trailing-slash exception), storage.cfg reconstruction, legacy database
-  migration, and existing enrollment/pending-set behavior; `tests/smoke.sh`
-  no longer masks real `systemd-analyze verify` failures.
+  migration end-to-end through `refresh_mount_db()` (including that its
+  diagnostics stay out of `mounts.db`), and existing enrollment/pending-set
+  behavior; `tests/smoke.sh` no longer masks real `systemd-analyze verify`
+  failures.
 
 ## 1.0.0 - 2026-09-10
 

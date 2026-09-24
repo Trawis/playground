@@ -139,11 +139,13 @@ The same applies to NFS exports, e.g. `203.0.113.20:/exports/media` vs.
 ### The trailing-slash exception
 
 The exact-match check has exactly one deliberately narrow exception,
-mirroring Proxmox's own NFS/CIFS mount validation: an expected source with
-no trailing slash also matches a live source with exactly one trailing
-slash added (`//203.0.113.10/media` matches `//203.0.113.10/media/`, but
-nothing broader - not two trailing slashes, not the reverse direction, and
-no other normalization of case, path segments, etc.).
+mirroring Proxmox's own NFS/CIFS source validation (effectively
+`^expected/?$`): the live source may equal the expected source with one
+additional trailing `/` appended (`//203.0.113.10/media` matches
+`//203.0.113.10/media/`; `203.0.113.20:/` matches `203.0.113.20://`, since
+the extra slash is appended regardless of whether the expected source
+already ends in one). Nothing broader is normalized - not two trailing
+slashes, not case, not path segments.
 
 ### Where the exact source comes from
 

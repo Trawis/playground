@@ -213,6 +213,11 @@ discover_current_mounts() {
 # Configured (fstab:/pve:) origin records are intentionally NOT carried
 # forward here, in either schema - discover_current_mounts() regenerates
 # them fresh on every refresh, so nothing is lost by dropping stale copies.
+#
+# This function's stdout is consumed as MOUNT_DB records by its caller
+# (refresh_mount_db, inside the pipeline that rebuilds MOUNT_DB), so its
+# own diagnostics go to stderr instead - otherwise they'd be piped into
+# the database as if they were data, and never reach the journal/log.
 carry_forward_custom_record() {
     local rec="$1"
     local f1 f2 f3 f4
@@ -228,13 +233,13 @@ carry_forward_custom_record() {
 
     if [[ -n "$f2" && "$f3" == mounted:* && -z "$f4" ]]; then
         # Legacy schema: target|ip|origin.
-        log "migrating legacy mount record for $f1 (origin $f3) to endpoint-only identity; the previous schema did not record an exact share/export"
+        log "migrating legacy mount record for $f1 (origin $f3) to endpoint-only identity; the previous schema did not record an exact share/export" >&2
         printf '%s|%s|endpoint|%s\n' "$f1" "$f2" "$f3"
         return 0
     fi
 
     if [[ "$rec" == *"mounted:"* ]]; then
-        log "WARN: could not parse remembered custom mount record for $f1, discarding: $rec"
+        log "WARN: could not parse remembered custom mount record for $f1, discarding: $rec" >&2
     fi
 }
 
@@ -427,20 +432,17 @@ boot_init() {
     log "boot pending set initialized: $(wc -l < "$PENDING_FILE") CT(s)"
 }
 
-# Full-source comparison for kind=full, with one narrow, deliberate
-# exception to exact equality: Proxmox's own NFS/CIFS mount validation
-# accepts the configured source with an optional single trailing slash, so
-# this mirrors that - and only that. "//host/media" matches a live source
-# of "//host/media" or "//host/media/", but nothing broader: no other
-# normalization (case, extra slashes, subpaths, etc.) is applied.
+# Full-source comparison for kind=full, mirroring Proxmox's own NFS/CIFS
+# source validation (effectively `^expected/?$`): the live source matches
+# if it equals the expected source, or equals the expected source with
+# exactly one additional trailing slash appended - regardless of whether
+# expected itself already ends in a slash. Nothing broader is normalized
+# (case, extra slashes, subpaths, etc.).
 full_source_matches() {
     local expected="$1"
     local actual="$2"
 
-    [[ "$actual" == "$expected" ]] && return 0
-    [[ "$expected" != */ && "$actual" == "$expected/" ]] && return 0
-
-    return 1
+    [[ "$actual" == "$expected" || "$actual" == "$expected/" ]]
 }
 
 # Readiness verification for one remembered dependency:
