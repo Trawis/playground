@@ -1,0 +1,12 @@
+[Unit]
+Description=Enroll IP-mount-dependent LXCs before Proxmox guest autostart
+After=pve-cluster.service
+Wants=pve-cluster.service
+Before=pve-guests.service
+
+[Service]
+Type=oneshot
+ExecStart=/usr/local/sbin/pve-ip-mount-gate --boot-init
+
+[Install]
+WantedBy=multi-user.target

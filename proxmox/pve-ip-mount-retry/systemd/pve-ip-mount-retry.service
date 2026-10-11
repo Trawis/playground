@@ -1,0 +1,8 @@
+[Unit]
+Description=Retry missing IP-backed CIFS/NFS mounts from /etc/fstab
+Wants=network-online.target
+After=network-online.target
+
+[Service]
+Type=oneshot
+ExecStart=/usr/local/sbin/pve-ip-mount-retry
